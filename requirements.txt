@@ -1,0 +1,22 @@
+# Weather Sniper Bot — Railway Deploy
+# Core
+requests>=2.31.0
+python-dotenv>=1.0.0
+aiohttp>=3.9.0
+
+# Polymarket CLOB V2
+py-clob-client-v2>=0.2.0
+
+# Ethereum / Web3 (balance, wallet)
+web3>=6.0.0
+eth-account>=0.8.0
+
+# ML (local XGBoost — no API needed)
+xgboost>=2.0.0
+numpy>=1.24.0
+
+# Telegram bot
+python-telegram-bot>=21.0,<22.0
+
+# Async websocket (for future WS integration)
+websockets>=12.0

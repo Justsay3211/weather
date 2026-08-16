@@ -1,0 +1,80 @@
+{
+  "tested_days": 110,
+  "basket_win_rate": 0.8727272727272727,
+  "center_hit_rate": 0.41818181818181815,
+  "forecast_mae_c": 0.7598181818181817,
+  "modeled_pnl": 26.58410000000001,
+  "modeled_roi_pct": 38.29684553538887,
+  "by_city": {
+    "london": {
+      "days": 11,
+      "basket_win_rate": 0.6363636363636364,
+      "center_hit_rate": 0.09090909090909091,
+      "mae_c": 1.3854545454545457,
+      "pnl": 0.08860000000000001
+    },
+    "seoul": {
+      "days": 11,
+      "basket_win_rate": 0.7272727272727273,
+      "center_hit_rate": 0.45454545454545453,
+      "mae_c": 0.9527272727272721,
+      "pnl": 4.661
+    },
+    "tokyo": {
+      "days": 11,
+      "basket_win_rate": 0.8181818181818182,
+      "center_hit_rate": 0.18181818181818182,
+      "mae_c": 0.989090909090909,
+      "pnl": 2.2291
+    },
+    "singapore": {
+      "days": 11,
+      "basket_win_rate": 1.0,
+      "center_hit_rate": 0.45454545454545453,
+      "mae_c": 0.5163636363636364,
+      "pnl": 4.172499999999999
+    },
+    "ankara": {
+      "days": 11,
+      "basket_win_rate": 1.0,
+      "center_hit_rate": 0.45454545454545453,
+      "mae_c": 0.37090909090909074,
+      "pnl": 2.8947
+    },
+    "paris": {
+      "days": 11,
+      "basket_win_rate": 1.0,
+      "center_hit_rate": 0.7272727272727273,
+      "mae_c": 0.4854545454545464,
+      "pnl": 3.1402999999999994
+    },
+    "madrid": {
+      "days": 11,
+      "basket_win_rate": 1.0,
+      "center_hit_rate": 0.5454545454545454,
+      "mae_c": 0.5472727272727282,
+      "pnl": 2.3966000000000003
+    },
+    "beijing": {
+      "days": 11,
+      "basket_win_rate": 0.6363636363636364,
+      "center_hit_rate": 0.2727272727272727,
+      "mae_c": 1.1654545454545462,
+      "pnl": 0.5552999999999999
+    },
+    "taipei": {
+      "days": 11,
+      "basket_win_rate": 0.9090909090909091,
+      "center_hit_rate": 0.36363636363636365,
+      "mae_c": 0.7236363636363646,
+      "pnl": 3.9222
+    },
+    "moscow": {
+      "days": 11,
+      "basket_win_rate": 1.0,
+      "center_hit_rate": 0.6363636363636364,
+      "mae_c": 0.46181818181818135,
+      "pnl": 2.5238
+    }
+  }
+}

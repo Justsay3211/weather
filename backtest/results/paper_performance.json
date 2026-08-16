@@ -1,0 +1,158 @@
+[
+  {
+    "ts": "2026-06-03T17:25:48.954824+00:00",
+    "mode": "PAPER",
+    "balance": 95.9,
+    "portfolio_value": 98.0,
+    "total_pnl": 0.0,
+    "roi_pct": 0.0,
+    "trades": 25,
+    "open": 1,
+    "wins": 0,
+    "losses": 4,
+    "win_rate": 0.0,
+    "by_strategy": {
+      "test": {
+        "trades": 1,
+        "wins": 0,
+        "pnl": 0.0
+      }
+    },
+    "by_city": {
+      "Test": {
+        "trades": 1,
+        "wins": 0,
+        "pnl": 0.0
+      }
+    }
+  },
+  {
+    "ts": "2026-06-03T17:26:22.453812+00:00",
+    "mode": "PAPER",
+    "balance": 95.9,
+    "portfolio_value": 98.0,
+    "total_pnl": 0.0,
+    "roi_pct": 0.0,
+    "trades": 25,
+    "open": 1,
+    "wins": 0,
+    "losses": 4,
+    "win_rate": 0.0,
+    "by_strategy": {
+      "test": {
+        "trades": 1,
+        "wins": 0,
+        "pnl": 0.0
+      }
+    },
+    "by_city": {
+      "Test": {
+        "trades": 1,
+        "wins": 0,
+        "pnl": 0.0
+      }
+    }
+  },
+  {
+    "ts": "2026-06-03T18:38:25.254895+00:00",
+    "mode": "PAPER",
+    "balance": 1.0,
+    "portfolio_value": 28.41,
+    "total_pnl": -69.59,
+    "roi_pct": -2319.7,
+    "trades": 95,
+    "open": 14,
+    "wins": 0,
+    "losses": 61,
+    "win_rate": 0.0,
+    "by_strategy": {
+      "test": {
+        "trades": 1,
+        "wins": 0,
+        "pnl": 0.0
+      },
+      "spread": {
+        "trades": 48,
+        "wins": 0,
+        "pnl": -26.69148936170213
+      },
+      "stability": {
+        "trades": 22,
+        "wins": 0,
+        "pnl": -42.9
+      }
+    },
+    "by_city": {
+      "Test": {
+        "trades": 1,
+        "wins": 0,
+        "pnl": 0.0
+      },
+      "Hong Kong": {
+        "trades": 13,
+        "wins": 0,
+        "pnl": -21.775000000000002
+      },
+      "Moscow": {
+        "trades": 6,
+        "wins": 0,
+        "pnl": -11.305000000000001
+      },
+      "London": {
+        "trades": 11,
+        "wins": 0,
+        "pnl": -15.114999999999998
+      },
+      "Paris": {
+        "trades": 6,
+        "wins": 0,
+        "pnl": -8.61
+      },
+      "Madrid": {
+        "trades": 3,
+        "wins": 0,
+        "pnl": -3.0
+      },
+      "Ankara": {
+        "trades": 3,
+        "wins": 0,
+        "pnl": -3.0
+      },
+      "Houston": {
+        "trades": 3,
+        "wins": 0,
+        "pnl": -3.0
+      },
+      "Buenos Aires": {
+        "trades": 2,
+        "wins": 0,
+        "pnl": -2.0
+      },
+      "Austin": {
+        "trades": 2,
+        "wins": 0,
+        "pnl": -2.0
+      },
+      "Chicago": {
+        "trades": 3,
+        "wins": 0,
+        "pnl": -3.0
+      },
+      "Seattle": {
+        "trades": 7,
+        "wins": 0,
+        "pnl": -7.095
+      },
+      "Tokyo": {
+        "trades": 5,
+        "wins": 0,
+        "pnl": 4.308510638297872
+      },
+      "Seoul": {
+        "trades": 6,
+        "wins": 0,
+        "pnl": 6.0
+      }
+    }
+  }
+]
