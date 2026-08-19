@@ -84,7 +84,16 @@ def configured():
 
 def enabled():
     c = _config()
-    return bool(configured() and getattr(c, "VPS_OFFLOAD_ENABLED", False))
+    if not configured():
+        return False
+    # VPS MASTER GATE: the dedicated vps_service master switch overrides the
+    # legacy per-feature flag. When the master (or offload) is off, offloading
+    # is off regardless of VPS_OFFLOAD_ENABLED. Fail-open to the legacy flag.
+    try:
+        from overlay import vps_service as _vps
+        return bool(_vps.offload_enabled())
+    except Exception:
+        return bool(getattr(c, "VPS_OFFLOAD_ENABLED", False))
 
 
 def _headers(extra=None):
@@ -282,7 +291,16 @@ def pull_bundle(since=None):
             return {"ok": False, "error": "HTTP %s" % resp.status_code}
         os.makedirs("data/exports", exist_ok=True)
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        path = os.path.join("data/exports", "vps_bundle_%s.zip" % stamp)
+        # 2026-08-19: tag the offload bundle with the master run-id so a recover
+        # can find and continue from the exact runtime's data. Fail-open.
+        _rid = ""
+        try:
+            from data import run_manager as _rm
+            _rid = _rm.run_id() or ""
+        except Exception:
+            _rid = ""
+        _tag = ("%s_%s" % (_rid, stamp)) if _rid else stamp
+        path = os.path.join("data/exports", "vps_bundle_%s.zip" % _tag)
         total = 0
         with open(path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=65536):

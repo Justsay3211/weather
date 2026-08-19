@@ -1127,11 +1127,19 @@ class PositionManager:
                     # REFUSE to settle from the legacy CLOB path and wait for the
                     # real resolver. Every other strategy (late_observed_no honest
                     # holds, baskets, etc.) is untouched, so nothing else changes.
-                    _guard = bool(getattr(Config, 'PHANTOM_GUARD_GOLDEN_ONLY', True))
-                    if _guard and ('golden_no' in str(getattr(pos, 'strategy', ''))):
+                    # PHANTOM GUARD (hardened 2026-08-19): a CLOB price snapping
+                    # to ~1.00 is NOT a real settlement. Previously only golden_no
+                    # was protected; PHANTOM_GUARD_ALL_STRATEGIES now refuses the
+                    # legacy CLOB win-snap for EVERY strategy so no phantom wins
+                    # are booked -- we wait for the real Polymarket resolver.
+                    _guard_all = bool(getattr(Config, 'PHANTOM_GUARD_ALL_STRATEGIES', True))
+                    _guard_golden = bool(getattr(Config, 'PHANTOM_GUARD_GOLDEN_ONLY', True))
+                    _strat = str(getattr(pos, 'strategy', ''))
+                    _blocked = _guard_all or (_guard_golden and 'golden_no' in _strat)
+                    if _blocked:
                         log.info("⏸️ PHANTOM GUARD: skip legacy CLOB win for "
-                                 "golden_no %s @ $%.3f (await real resolve)"
-                                 % (pos.bucket_label[:30], price))
+                                 "%s %s @ $%.3f (await real resolve)"
+                                 % (_strat or 'position', pos.bucket_label[:30], price))
                     else:
                         pos.redeemable = True
                         pos.settle_source = 'clob'
@@ -1347,6 +1355,16 @@ class PositionManager:
                                      if pos.minutes_to_close is not None else None),
                 'balance_after': round(self.paper_balance, 2),
             }
+            # 2026-08-19: stamp the master run-id on every record so logs/exports
+            # are attributable to the exact runtime (crucial for recover-update,
+            # which continues from a given run-id's data). Fail-open.
+            try:
+                from data import run_manager as _rm
+                _rid = _rm.run_id()
+                if _rid:
+                    rec['run_id'] = _rid
+            except Exception:
+                pass
             if extra:
                 rec.update(extra)
             with open(self._paper_trades_file, 'a') as f:

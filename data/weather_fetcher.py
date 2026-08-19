@@ -55,6 +55,11 @@ class WeatherFetcher:
         self.session.headers.update({'User-Agent': f'WeatherSniper/{Config.VERSION}'})
         self._cache: Dict[str, Tuple[float, List[ForecastPoint]]] = {}
         self._cache_ttl = int(getattr(Config, 'WEATHER_FORECAST_CACHE_SECONDS', 300))  # 5 min default
+        # 10k-LIMIT MODE request meter (adaptive cache TTL / polling). Counts
+        # external Open-Meteo calls over a rolling 24h window so limit10k mode
+        # can stretch the cache TTL to stay under the daily budget (~13k/day).
+        self._req_count = 0
+        self._req_window_start = time.time()
         self._om_idx = 0  # round-robin index across Open-Meteo endpoints
         # endpoint URL -> epoch time when it may be retried after a rate/IP limit
         self._om_cooldowns: Dict[str, float] = {}
@@ -78,14 +83,58 @@ class WeatherFetcher:
     def _open_meteo_endpoints(self) -> List[str]:
         """Primary Open-Meteo endpoints + optional failover mirrors.
         Failover mirrors are appended last and only get reached when the primary
-        endpoints are cooling down after a rate/IP limit."""
+        endpoints are cooling down after a rate/IP limit.
+
+        VPS MASTER GATE: when the VPS master switch (or the weather-proxy sub-
+        toggle) is OFF, any endpoint pointing at the VPS base URL is stripped so
+        the fetch goes DIRECT to Open-Meteo. Turning the VPS off therefore turns
+        off the VPS-routed weather fetch, exactly as configured, without ever
+        killing weather data entirely (the bot needs it to trade).
+        """
         eps = list(getattr(Config, 'OPEN_METEO_ENDPOINTS', None) or [])
         if not eps:
             eps = ["https://api.open-meteo.com/v1/forecast"]
         for fb in (getattr(Config, 'OPEN_METEO_FAILOVER_ENDPOINTS', None) or []):
             if fb not in eps:
                 eps.append(fb)
+        try:
+            from overlay import vps_service as _vps
+            if not _vps.weather_proxy_enabled():
+                base = str(getattr(Config, 'VPS_BASE_URL', '') or '')
+                if base:
+                    direct = [u for u in eps if not str(u).startswith(base)]
+                    eps = direct or ["https://api.open-meteo.com/v1/forecast"]
+        except Exception:
+            pass
         return eps
+
+    def _effective_cache_ttl(self) -> int:
+        """Cache TTL used for the forecast cache. In 'normal' mode this is the
+        fixed WEATHER_FORECAST_CACHE_SECONDS. In 'limit10k' mode it self-tunes:
+        the observed request rate is projected to a full day and, if it would
+        exceed WEATHER_DAILY_BUDGET * safety, the TTL is scaled up (slower
+        polling) so the bot uses the ~10k free tier efficiently instead of
+        blowing through it."""
+        base = int(getattr(Config, 'WEATHER_FORECAST_CACHE_SECONDS', 300))
+        mode = str(getattr(Config, 'WEATHER_FETCH_MODE', 'normal') or 'normal').lower()
+        if mode != 'limit10k':
+            return base
+        now = time.time()
+        # roll the counter window daily so the estimate stays current
+        if now - self._req_window_start > 86400:
+            self._req_count = 0
+            self._req_window_start = now
+        lo = int(getattr(Config, 'WEATHER_MIN_CACHE_SECONDS', 120))
+        hi = int(getattr(Config, 'WEATHER_MAX_CACHE_SECONDS', 1800))
+        budget = int(getattr(Config, 'WEATHER_DAILY_BUDGET', 13000))
+        safety = float(getattr(Config, 'WEATHER_LIMIT_SAFETY_PCT', 0.80))
+        target = max(1.0, budget * safety)
+        elapsed = max(60.0, now - self._req_window_start)
+        rate_per_day = self._req_count * 86400.0 / elapsed
+        if rate_per_day <= target:
+            return max(lo, min(base, hi))
+        scale = rate_per_day / target
+        return int(max(lo, min(hi, base * scale)))
 
     def _endpoint_cooling(self, url: str) -> bool:
         """True if this endpoint is resting after a recent rate/IP limit.
@@ -147,6 +196,7 @@ class WeatherFetcher:
                 log.warning("⚠️  All Open-Meteo endpoints are cooling down — using other sources")
                 return None
             try:
+                self._req_count += 1  # 10k-limit meter: count every external attempt
                 resp = self.session.get(url, params=params, timeout=10, headers=self._proxy_headers(url))
             except Exception as e:
                 log.debug(f"Open-Meteo request error ({url}): {e}")
@@ -198,7 +248,7 @@ class WeatherFetcher:
         now = time.time()
         if cache_key in self._cache:
             cached_time, cached_data = self._cache[cache_key]
-            if now - cached_time < self._cache_ttl:
+            if now - cached_time < self._effective_cache_ttl():
                 return cached_data
 
         results = []

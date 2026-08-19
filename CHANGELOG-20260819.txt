@@ -1,0 +1,5 @@
+weather_pol UPDATED FILES ONLY - 20260819
+
+NEW: data/grade_edge_engine.py, data/run_manager.py, overlay/vps_service.py, strategies/late_observed_remaster.py, strategies/late_observed_no_arbitrage.py
+EDITED: config.py, dashboard.py, data/weather_fetcher.py, data/observed_weather.py, data/vps_store.py, trading/position_manager.py, bot/settings_store.py, bot/telegram_ui.py
+TEST: tools/smoke_turn43.py (24/24 pass)

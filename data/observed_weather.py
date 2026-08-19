@@ -97,25 +97,82 @@ def _obs_cache_ttl() -> int:
     return int(getattr(c, "OBSERVED_CACHE_TTL_SECONDS", 10800)) if c is not None else 10800
 
 
+# BRIDGE-GAP FIX (2026-08-19): the observed cache used to live ONLY in this
+# in-memory dict, so every Railway redeploy / process restart wiped it. With
+# frequent restarts the cache was almost always empty at read time -> it could
+# never bridge a starved read (user saw "not even one bridged" + many gaps). We
+# now PERSIST the cache to data/observed_cache.json so a good reading survives
+# restarts and can bridge later starvation for the rest of the day. Fail-open.
+import json as _json
+import os as _os
+
+_OBS_CACHE_PATH = _os.path.join("data", "observed_cache.json")
+_OBS_CACHE_LOADED = False
+
+
+def _obs_key_str(key):
+    try:
+        return "|".join(str(p) for p in key)
+    except Exception:
+        return str(key)
+
+
+def _obs_cache_load():
+    global _OBS_CACHE_LOADED
+    if _OBS_CACHE_LOADED:
+        return
+    _OBS_CACHE_LOADED = True
+    try:
+        if _os.path.exists(_OBS_CACHE_PATH):
+            with open(_OBS_CACHE_PATH, "r") as f:
+                raw = _json.load(f) or {}
+            for k, rec in raw.items():
+                try:
+                    _OBS_CACHE[k] = (float(rec[0]), float(rec[1]))
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+
+def _obs_cache_save():
+    try:
+        _os.makedirs("data", exist_ok=True)
+        out = {}
+        for k, rec in _OBS_CACHE.items():
+            out[k if isinstance(k, str) else _obs_key_str(k)] = [rec[0], rec[1]]
+        with open(_OBS_CACHE_PATH, "w") as f:
+            _json.dump(out, f)
+    except Exception:
+        pass
+
+
 def _obs_cache_get(key):
-    rec = _OBS_CACHE.get(key)
+    _obs_cache_load()
+    k = key if isinstance(key, str) else _obs_key_str(key)
+    rec = _OBS_CACHE.get(k) or _OBS_CACHE.get(key)
     if not rec:
         return None
     ts, val = rec
     if time.time() - ts > _obs_cache_ttl():
+        _OBS_CACHE.pop(k, None)
         _OBS_CACHE.pop(key, None)
         return None
     return val
 
 
 def _obs_cache_merge(key, value, mode):
-    """Store & return the up-only (high) / down-only (low) merged extreme."""
+    """Store & return the up-only (high) / down-only (low) merged extreme.
+    Persists to disk so the bridge survives restarts."""
+    _obs_cache_load()
+    k = key if isinstance(key, str) else _obs_key_str(key)
     prev = _obs_cache_get(key)
     if prev is None:
         merged = float(value)
     else:
         merged = max(prev, float(value)) if mode == "high" else min(prev, float(value))
-    _OBS_CACHE[key] = (time.time(), merged)
+    _OBS_CACHE[k] = (time.time(), merged)
+    _obs_cache_save()
     return merged
 
 

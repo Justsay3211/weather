@@ -647,7 +647,35 @@ class TelegramBot:
         """Status = summary + first page of open positions (paginated/sortable)."""
         if not self.pm:
             return
+        self._send_node_line()
         self.send_positions(page=0, sort='recent', with_summary=True)
+
+    def _send_node_line(self):
+        """2026-08-19: compact header showing bot version, active run-id and VPS
+        state (version on node). Fail-open -- never blocks /status."""
+        try:
+            from overlay import vps_service as _vps
+            st = _vps.status()
+            ver = st.get('version') or ''
+            run_id = st.get('run_id') or ''
+            if _vps.services_enabled():
+                nv = _vps.node_version()
+                vps_state = ('\U0001F7E2 ON' if _vps.services_enabled() else '\u26AA OFF')
+                node_txt = (' \u00B7 node ' + self._esc(nv)) if nv else ''
+                proxy = 'proxy' if st.get('weather_proxy') else 'direct-wx'
+                off = 'offload' if st.get('offload') else 'bot-mem'
+                vps_line = ("\U0001F5C4\uFE0F VPS %s%s \u00B7 %s \u00B7 %s \u00B7 wx:%s"
+                            % (vps_state, node_txt, proxy, off, st.get('weather_fetch_mode', 'normal')))
+            else:
+                vps_line = "\U0001F5C4\uFE0F VPS \u26AA OFF (all VPS services off; weather fetches direct)"
+            head = "\u2699\uFE0F <b>Node</b>"
+            if ver:
+                head += " v%s" % self._esc(ver)
+            if run_id:
+                head += " \u00B7 run <code>%s</code>" % self._esc(run_id)
+            self.send(head + "\n" + vps_line)
+        except Exception as _e:
+            log.debug("node line skipped (fail-open): %s" % _e)
 
     def send_markets_summary(self):
         """Send summary of available markets."""
@@ -1092,6 +1120,19 @@ class TelegramBot:
         if not self.pm:
             self.send("\u26A0\uFE0F Analysis unavailable -- position manager not wired.")
             return
+        # 2026-08-19: when VPS offload is on, /analysis pulls the offloaded
+        # bundle back from VPS storage first so the report reflects the WHOLE
+        # history (offloaded rows were deleted from Railway). Gated by the VPS
+        # master switch via vps_service.pull_on_analysis_enabled(). Fail-open.
+        try:
+            from overlay import vps_service as _vps
+            if _vps.pull_on_analysis_enabled():
+                from data import vps_store as _vstore
+                pulled = _vstore.pull_bundle()
+                if pulled:
+                    log.info("/analysis pulled %s VPS bundle file(s)" % (pulled if isinstance(pulled, int) else len(pulled)))
+        except Exception as _e:
+            log.debug("analysis VPS pull skipped (fail-open): %s" % _e)
         stats = self.pm.get_stats()
         by_strat = self.pm.get_per_strategy_stats()
 

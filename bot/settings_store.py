@@ -133,6 +133,12 @@ BOOL_KEYS = [
     'WX_MODEL_GEM_SEAMLESS_ENABLED',
     # Req-27 #g ML veto batching + extra VPS controls
     'ML_VETO_BATCH_ENABLED', 'VPS_PULL_ON_OFFLOAD', 'VPS_ANALYSIS_MERGE_ENABLED',
+    # 2026-08-19 upgrade: VPS master switch + sub-toggles (master OFF = ALL VPS
+    # services off, incl. weather proxy -> fetch goes direct to Open-Meteo)
+    'VPS_SERVICES_ENABLED', 'VPS_WEATHER_PROXY_ENABLED', 'VPS_PULL_ON_ANALYSIS',
+    # 2026-08-19: new grade+edge engine, run-id, phantom guard, new strategies
+    'GRADE_EDGE_ENGINE_ENABLED', 'RUN_ID_ENABLED', 'PHANTOM_GUARD_ALL_STRATEGIES',
+    'LATE_OBSERVED_REMASTER_ENABLED', 'LATE_OBS_NO_ARB_ENABLED',
 ]
 
 # -- Numeric gates: key -> (min, max, step, is_int) ---------------------
@@ -277,6 +283,30 @@ NUM_KEYS: Dict[str, tuple] = {
     'VPS_OFFLOAD_BATCH_LINES':      (200, 20000, 200, True),
     # Req-27 #g: ML veto batch size (1 = per-call/normal, 2-4 = batch N legs)
     'ML_VETO_GROUP_SIZE':           (1, 4, 1, True),
+    # 2026-08-19: grade+edge engine calibration knobs
+    'GRADE_EDGE_RAW_ANCHOR_W':      (0.0, 1.0, 0.05, False),
+    'GRADE_EDGE_CALIB_TEMPERATURE': (0.5, 4.0, 0.1, False),
+    'GRADE_EDGE_CALIB_BIAS':        (-1.0, 1.0, 0.05, False),
+    'GRADE_EDGE_MAX_PROB':          (0.50, 0.99, 0.01, False),
+    # 2026-08-19: late_observed_remaster gates
+    'REMASTER_MIN_EDGE':            (0.00, 0.40, 0.01, False),
+    'REMASTER_MIN_GRADE':           (0.00, 1.00, 0.05, False),
+    'REMASTER_MIN_LOCK':            (0.50, 0.99, 0.05, False),
+    'REMASTER_SAMEDAY_MIN_LOCK':    (0.50, 0.99, 0.05, False),
+    # 2026-08-19: late_observed_no_arbitrage gates
+    'LATE_OBS_NO_ARB_MIN_LOCK':     (0.50, 0.99, 0.05, False),
+    'LATE_OBS_NO_ARB_MIN_AVG_PROB': (0.50, 0.99, 0.01, False),
+    'LATE_OBS_NO_ARB_MIN_GRADE':    (0.00, 1.00, 0.05, False),
+    'LATE_OBS_NO_ARB_MIN_PRICE':    (0.01, 0.50, 0.01, False),
+    'LATE_OBS_NO_ARB_MAX_PRICE':    (0.50, 0.99, 0.01, False),
+    'LATE_OBS_NO_ARB_MIN_LEGS':     (2, 8, 1, True),
+    'LATE_OBS_NO_ARB_MAX_LEGS':     (2, 10, 1, True),
+    'LATE_OBS_NO_ARB_MAX_BASKET_USD': (3, 50, 1, False),
+    # 2026-08-19: weather 10k-limit adaptive fetch planning
+    'WEATHER_DAILY_BUDGET':         (1000, 30000, 500, True),
+    'WEATHER_FETCH_SAFETY':         (0.30, 1.00, 0.05, False),
+    'WEATHER_MIN_CACHE_SECONDS':    (30, 1800, 30, True),
+    'WEATHER_MAX_CACHE_SECONDS':    (300, 7200, 60, True),
 }
 
 # -- String/choice settings: key -> list of allowed values (first = default) --
@@ -301,6 +331,17 @@ STR_KEYS: Dict[str, List[str]] = {
     'VPS_HANDLING_MAE': ['full', 'weekly', 'monthly'],
     'VPS_HANDLING_TIMESERIES': ['full', 'weekly', 'monthly'],
     'VPS_HANDLING_WEATHER_TRACE': ['full', 'weekly', 'monthly'],
+    # 2026-08-19: weather fetch mode -- normal vs 10k-limit adaptive polling
+    'WEATHER_FETCH_MODE': ['normal', 'limit10k'],
+    # 2026-08-19: per-document VPS target -- 'vps' = offload+delete-on-Railway,
+    # 'railway' = keep in bot's own memory (Railway disk)
+    'VPS_DOC_DEFAULT': ['vps', 'railway'],
+    'VPS_DOC_PAPER_TRADES': ['vps', 'railway'],
+    'VPS_DOC_MAE': ['vps', 'railway'],
+    'VPS_DOC_TIMESERIES': ['vps', 'railway'],
+    'VPS_DOC_WEATHER_TRACE': ['vps', 'railway'],
+    'VPS_DOC_BOOK_TRACE': ['vps', 'railway'],
+    'VPS_DOC_MANIFEST': ['vps', 'railway'],
 }
 
 # STR keys that accept FREE TEXT (not a fixed choice list) — e.g. the overlay
@@ -430,6 +471,30 @@ GROUPS: List[dict] = [
         # Req-27 #c: per-stream data handling (full=one file / weekly / monthly)
         'VPS_HANDLING_PAPER_TRADES', 'VPS_HANDLING_MAE',
         'VPS_HANDLING_TIMESERIES', 'VPS_HANDLING_WEATHER_TRACE',
+    ]},
+    {'id': 'vpsmaster', 'tab': 'VPS Master', 'title': 'VPS master switch + services (OFF = ALL VPS off, weather fetches direct)', 'keys': [
+        'VPS_SERVICES_ENABLED', 'VPS_WEATHER_PROXY_ENABLED',
+        'VPS_OFFLOAD_ENABLED', 'VPS_PULL_ON_ANALYSIS',
+        'WEATHER_FETCH_MODE', 'WEATHER_DAILY_BUDGET', 'WEATHER_FETCH_SAFETY',
+        'WEATHER_MIN_CACHE_SECONDS', 'WEATHER_MAX_CACHE_SECONDS',
+    ]},
+    {'id': 'vpsdocs', 'tab': 'VPS Docs', 'title': 'Per-document VPS target (vps = offload+delete on Railway / railway = keep in bot memory)', 'keys': [
+        'VPS_DOC_DEFAULT', 'VPS_DOC_PAPER_TRADES', 'VPS_DOC_MAE',
+        'VPS_DOC_TIMESERIES', 'VPS_DOC_WEATHER_TRACE', 'VPS_DOC_BOOK_TRACE',
+        'VPS_DOC_MANIFEST',
+    ]},
+    {'id': 'engine', 'tab': 'Grade+Edge', 'title': 'Grade & Edge engine (multi-pipeline, calibrated, ML-assisted)', 'keys': [
+        'GRADE_EDGE_ENGINE_ENABLED', 'GRADE_EDGE_RAW_ANCHOR_W',
+        'GRADE_EDGE_CALIB_TEMPERATURE', 'GRADE_EDGE_CALIB_BIAS', 'GRADE_EDGE_MAX_PROB',
+        'RUN_ID_ENABLED', 'PHANTOM_GUARD_ALL_STRATEGIES',
+    ]},
+    {'id': 'remaster', 'tab': 'Remaster', 'title': 'Late-Observed Remaster + NO-Arbitrage (new strategies)', 'keys': [
+        'LATE_OBSERVED_REMASTER_ENABLED',
+        'REMASTER_MIN_EDGE', 'REMASTER_MIN_GRADE', 'REMASTER_MIN_LOCK', 'REMASTER_SAMEDAY_MIN_LOCK',
+        'LATE_OBS_NO_ARB_ENABLED',
+        'LATE_OBS_NO_ARB_MIN_LOCK', 'LATE_OBS_NO_ARB_MIN_AVG_PROB', 'LATE_OBS_NO_ARB_MIN_GRADE',
+        'LATE_OBS_NO_ARB_MIN_PRICE', 'LATE_OBS_NO_ARB_MAX_PRICE',
+        'LATE_OBS_NO_ARB_MIN_LEGS', 'LATE_OBS_NO_ARB_MAX_LEGS', 'LATE_OBS_NO_ARB_MAX_BASKET_USD',
     ]},
     {'id': 'notify', 'tab': 'Notifications', 'title': 'Telegram event notifications (state-change only, rate-limited, no disk logs)', 'keys': [
         'NOTIFY_WEATHER_SOURCE', 'NOTIFY_VPS_HEALTH', 'NOTIFY_VPS_OFFLOAD',

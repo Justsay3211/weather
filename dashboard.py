@@ -35,6 +35,18 @@ from strategies.confident_strategy import ConfidentStrategy
 from strategies.late_observed_temp import LateObservedTempStrategy
 from strategies.quick_flip import QuickFlipStrategy
 from strategies.peak_cluster import PeakClusterStrategy
+# NEW (2026-08-19): remaster + NO-arbitrage strategies (run alongside the core),
+# the master run-id manager, and the multi-pipeline grade+edge engine.
+from strategies.late_observed_remaster import LateObservedRemasterStrategy
+from strategies.late_observed_no_arbitrage import LateObservedNoArbitrageStrategy
+try:
+    from data import run_manager
+except Exception:  # keep bot runnable even if run_manager import fails
+    run_manager = None
+try:
+    from data import grade_edge_engine
+except Exception:
+    grade_edge_engine = None
 from data.stability import StabilityEngine
 from data.liquidity_guard import LiquidityGuard
 from data.clob_client import ClobClient
@@ -57,6 +69,22 @@ class WeatherBot:
 
     def __init__(self):
         settings_store.load_into_config()   # apply persisted runtime overrides (Telegram /settings)
+        # MASTER RUN-ID: mint a random, collision-checked run id for this boot
+        # (stamped into logs, paper trades, offload names + the session
+        # manifest). RECOVER mode reuses the previous id to continue the same
+        # timeline. Fail-open so a bad manifest never blocks startup.
+        self.run = {}
+        try:
+            if run_manager is not None and getattr(Config, 'RUN_ID_ENABLED', True):
+                _recover = str(os.getenv('RUN_RECOVER', '')).strip().lower() in ('1', 'true', 'yes')
+                _rid_env = os.getenv('RUN_RESUME_ID', '').strip() or None
+                self.run = run_manager.start(
+                    mode='recover' if (_recover or _rid_env) else 'fresh',
+                    resume_run_id=_rid_env,
+                )
+                log.info(f"\U0001F194 run_id={self.run.get('run_id')} mode={self.run.get('mode')}")
+        except Exception as _rme:
+            log.debug(f"run_manager start skipped: {_rme}")
         # Req-28: NEVER auto-trade on boot. A fresh Railway deploy (or any
         # restart) must come up with trading OFF and wait for the user to press
         # [Start Trading] / type 'start'. Force the master switch False here even
@@ -68,6 +96,11 @@ class WeatherBot:
         self.confident = ConfidentStrategy()
         # PRIMARY strategy: trade the observed/locked daily extreme (YES + NO).
         self.late_observed = LateObservedTempStrategy()
+        # NEW: remaster (smarter second opinion on the SAME observed signal via
+        # the grade+edge engine) + NO-arbitrage basket. Both run ALONGSIDE
+        # late_observed_no, which is left untouched.
+        self.late_observed_remaster = LateObservedRemasterStrategy(base=self.late_observed)
+        self.late_observed_no_arb = LateObservedNoArbitrageStrategy()
         # Forecast-change arbitrage: enter a freshly mispriced bucket before the
         # book digests new model data; flips quick or holds if structural.
         self.quick_flip = QuickFlipStrategy()
@@ -142,6 +175,13 @@ class WeatherBot:
             log.error(f"restart_fresh failed: {e}")
             return False
         Config.TRADING_ENABLED = False  # a fresh restart must not auto-resume trading
+        # RECOVER/RESTART run-id note: stamp the restart event on the active
+        # run so the manifest + logs show the continuation point.
+        try:
+            if run_manager is not None:
+                run_manager.note('restart_fresh', starting_balance=float(bal))
+        except Exception:
+            pass
         self.scan_count = 0
         self.signals_generated = 0
         self.trades_placed = 0
@@ -1060,6 +1100,112 @@ class WeatherBot:
                                 pos.cost_usd, pos.shares, pos.strategy,
                                 edge=leg.edge, city=city,
                             )
+
+        # ==================================================================
+        # NEW STRATEGIES (2026-08-19): REMASTER + NO-ARBITRAGE. Both run on the
+        # SAME observed_state as late_observed_no (which is left untouched),
+        # placing under their own tags. Fully guarded + fail-open so they can
+        # never disturb the proven core edge.
+        # ==================================================================
+        _os_state = locals().get('observed_state', None)
+        if _os_state is not None:
+            _days_to_res = None
+            try:
+                from datetime import datetime as _dt, timezone as _tz
+                if getattr(market, 'resolution_time', None):
+                    _rt = market.resolution_time
+                    if getattr(_rt, 'tzinfo', None) is None:
+                        _rt = _rt.replace(tzinfo=_tz.utc)
+                    _days_to_res = (_rt - _dt.now(_tz.utc)).total_seconds() / 86400.0
+            except Exception:
+                _days_to_res = None
+            try:
+                _wr = self._strategy_win_rate('late_observed_no')
+            except Exception:
+                _wr = None
+
+            # ---- REMASTER: smarter second opinion via grade+edge engine ----
+            try:
+                if getattr(Config, 'LATE_OBSERVED_REMASTER_ENABLED', True):
+                    _rm_signals = self.late_observed_remaster.evaluate(
+                        market.title, buckets, market_prices, token_ids, balance,
+                        city, _os_state, no_prices=no_prices, no_token_ids=no_token_ids,
+                        grade=grade, market_type=market.market_type,
+                        days_to_resolution=_days_to_res, win_rate=_wr,
+                        base_signals=locals().get('obs_signals', None),
+                    )
+                    for _sig in (_rm_signals or []):
+                        for _leg in _sig.legs:
+                            if not _leg.token_id:
+                                continue
+                            _pos = self._place(
+                                token_id=_leg.token_id,
+                                condition_id=condition_ids.get(_leg.bucket_label, ''),
+                                entry_price=_leg.price,
+                                base_size_usd=_leg.size_usd,
+                                market_title=market.title,
+                                bucket_label=f"{_leg.side} {_leg.bucket_label}",
+                                strategy='late_observed_remaster',
+                                city=city, slug=market.slug,
+                                resolution_time=market.resolution_time,
+                                edge=_leg.edge, grade=grade, hold_hint=True,
+                                early_exit_price=early_exit_price,
+                                apply_grade_size=False, reason=_sig.reason,
+                                lock_confidence=_sig.lock_confidence,
+                                signal='late_observed_remaster',
+                                our_prob=getattr(_leg, 'our_probability', 0.0),
+                                use_factor_kelly=True, use_ml=True,
+                            )
+                            if _pos:
+                                self.trades_placed += 1
+                                self.telegram.notify_trade(
+                                    'BUY', f"{_leg.side} {_leg.bucket_label}", _pos.entry_price,
+                                    _pos.cost_usd, _pos.shares, _pos.strategy,
+                                    edge=_leg.edge, city=city,
+                                )
+            except Exception as _rme:
+                log.debug(f"remaster placement skipped: {_rme}")
+
+            # ---- NO-ARBITRAGE: near-arb NO basket over ruled-out buckets ----
+            try:
+                if getattr(Config, 'LATE_OBS_NO_ARB_ENABLED', True):
+                    _na_signals = self.late_observed_no_arb.evaluate(
+                        market.title, buckets, balance, city, _os_state,
+                        no_prices=no_prices, no_token_ids=no_token_ids,
+                        grade=grade, market_type=market.market_type,
+                        days_to_resolution=_days_to_res, win_rate=_wr,
+                    )
+                    for _sig in (_na_signals or []):
+                        for _leg in _sig.legs:
+                            if not _leg.token_id:
+                                continue
+                            _pos = self._place(
+                                token_id=_leg.token_id,
+                                condition_id=condition_ids.get(_leg.bucket_label, ''),
+                                entry_price=_leg.price,
+                                base_size_usd=_leg.size_usd,
+                                market_title=market.title,
+                                bucket_label=f"NO {_leg.bucket_label}",
+                                strategy='late_observed_no_arb',
+                                city=city, slug=market.slug,
+                                resolution_time=market.resolution_time,
+                                edge=_leg.edge, grade=grade, hold_hint=True,
+                                early_exit_price=early_exit_price,
+                                apply_grade_size=False, reason=_sig.reason,
+                                lock_confidence=_sig.lock_confidence,
+                                signal='late_observed_no_arb',
+                                our_prob=getattr(_leg, 'our_probability', 0.0),
+                                use_factor_kelly=True, use_ml=True,
+                            )
+                            if _pos:
+                                self.trades_placed += 1
+                                self.telegram.notify_trade(
+                                    'BUY', f"NO {_leg.bucket_label}", _pos.entry_price,
+                                    _pos.cost_usd, _pos.shares, _pos.strategy,
+                                    edge=_leg.edge, city=city,
+                                )
+            except Exception as _nae:
+                log.debug(f"no-arb placement skipped: {_nae}")
 
         # ------------------------------------------------------
         # QUICK FLIP (Req-28 v3) — HIGH-confidence mispricing flip with a 10%

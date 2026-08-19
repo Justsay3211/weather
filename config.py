@@ -285,13 +285,20 @@ class Config:
     STRATEGY_SIZE_MULT = {
         'peak_cluster': float(os.getenv('SIZE_MULT_PEAK_CLUSTER', '1.0')),
         'late_observed_yes': float(os.getenv('SIZE_MULT_LATE_OBSERVED_YES', '0.6')),
-        'late_observed_no': float(os.getenv('SIZE_MULT_LATE_OBSERVED_NO', '1.3')),
+        # BOOST REDUCED TO NORMAL (user req 2026-08-19): late_observed_no,
+        # golden_no, the new remaster and the winning paper strategies all sized
+        # at 1.0 (neutral) instead of an extra 1.3 lean. Sizing quality now comes
+        # from the multi-pipeline grade+edge engine (size_strength), not a flat
+        # per-strategy boost. Env vars still override.
+        'late_observed_no': float(os.getenv('SIZE_MULT_LATE_OBSERVED_NO', '1.0')),
         'quick_flip': float(os.getenv('SIZE_MULT_QUICK_FLIP', '1.0')),
         # golden_no = audited fusion strategy (overlay/golden_gate.py). Skims the
         # Golden-Filter subset of late_observed_no + peaker_cool_basket into a
         # separately-named, boosted strategy. Same 1.3 lean as late_observed_no
         # so the bot up-sizes toward the +$332 / 68% WR core. Env overrides.
-        'golden_no': float(os.getenv('SIZE_MULT_GOLDEN_NO', '1.3')),
+        'golden_no': float(os.getenv('SIZE_MULT_GOLDEN_NO', '1.0')),
+        'late_observed_remaster': float(os.getenv('SIZE_MULT_LATE_OBSERVED_REMASTER', '1.0')),
+        'late_observed_no_arb': float(os.getenv('SIZE_MULT_LATE_OBSERVED_NO_ARB', '1.0')),
     }
 
     # === GOLDEN FILTER + LATE-OBSERVED TIMING (overlay/golden_gate.py) =====
@@ -347,6 +354,94 @@ class Config:
     ADAPTIVE_EXIT_ENABLED = os.getenv('ADAPTIVE_EXIT_ENABLED', '1') == '1'
     AUTO_REDEEM_ENABLED = os.getenv('AUTO_REDEEM_ENABLED', '1') == '1'
     DRAWDOWN_GATE_ENABLED = os.getenv('DRAWDOWN_GATE_ENABLED', '1') == '1'
+
+    # ===================================================================
+    # GRADE + EDGE ENGINE (data/grade_edge_engine.py) - the separate,
+    # multi-pipeline "compute app" (XGBoost-style boosted-stump ensemble) that
+    # replaces the single overconfident normal-CDF edge + single stability grade
+    # with a calibrated, multi-parameter score. Fixes: inverted/overconfident
+    # edge, size scaling UP with raw edge. Blends live ML when available.
+    # ===================================================================
+    GRADE_EDGE_ENGINE_ENABLED = os.getenv('GRADE_EDGE_ENGINE_ENABLED', '1') == '1'
+    GRADE_EDGE_RAW_ANCHOR_W = float(os.getenv('GRADE_EDGE_RAW_ANCHOR_W', '0.6'))
+    GRADE_EDGE_CALIB_TEMPERATURE = float(os.getenv('GRADE_EDGE_CALIB_TEMPERATURE', '1.6'))  # >1 = less overconfident
+    GRADE_EDGE_CALIB_BIAS = float(os.getenv('GRADE_EDGE_CALIB_BIAS', '-0.15'))              # correct systematic optimism
+    GRADE_EDGE_MAX_PROB = float(os.getenv('GRADE_EDGE_MAX_PROB', '0.97'))                   # realistic ceiling (never 0.999)
+
+    # ===================================================================
+    # NEW STRATEGY: LATE OBSERVED REMASTER (strategies/late_observed_remaster.py)
+    # Runs ALONGSIDE late_observed_no (which is left untouched). Re-scores the
+    # SAME observed signal through the grade+edge engine and adds P1-P4:
+    # lock-based same-day timing, calibrated prob, quality filter, size
+    # decoupled from raw edge.
+    # ===================================================================
+    LATE_OBSERVED_REMASTER_ENABLED = os.getenv('LATE_OBSERVED_REMASTER_ENABLED', '1') == '1'
+    REMASTER_MIN_EDGE = float(os.getenv('REMASTER_MIN_EDGE', '0.05'))
+    REMASTER_MIN_GRADE = float(os.getenv('REMASTER_MIN_GRADE', '0.45'))
+    REMASTER_MIN_LOCK = float(os.getenv('REMASTER_MIN_LOCK', '0.70'))
+    REMASTER_SAMEDAY_MIN_LOCK = float(os.getenv('REMASTER_SAMEDAY_MIN_LOCK', '0.85'))  # same-day allowed only when strongly locked
+
+    # ===================================================================
+    # NEW STRATEGY: LATE OBSERVED NO-ARBITRAGE
+    # (strategies/late_observed_no_arbitrage.py). Builds a near-arb NO basket
+    # over the mutually-exclusive buckets the lock has ruled out (buy NO on many
+    # buckets; at most one can settle YES).
+    # ===================================================================
+    LATE_OBS_NO_ARB_ENABLED = os.getenv('LATE_OBS_NO_ARB_ENABLED', '1') == '1'
+    LATE_OBS_NO_ARB_MIN_LOCK = float(os.getenv('LATE_OBS_NO_ARB_MIN_LOCK', '0.75'))
+    LATE_OBS_NO_ARB_MIN_AVG_PROB = float(os.getenv('LATE_OBS_NO_ARB_MIN_AVG_PROB', '0.80'))
+    LATE_OBS_NO_ARB_MIN_GRADE = float(os.getenv('LATE_OBS_NO_ARB_MIN_GRADE', '0.50'))
+    LATE_OBS_NO_ARB_MIN_PRICE = float(os.getenv('LATE_OBS_NO_ARB_MIN_PRICE', '0.04'))
+    LATE_OBS_NO_ARB_MAX_PRICE = float(os.getenv('LATE_OBS_NO_ARB_MAX_PRICE', '0.97'))
+    LATE_OBS_NO_ARB_MIN_LEGS = int(os.getenv('LATE_OBS_NO_ARB_MIN_LEGS', '3'))
+    LATE_OBS_NO_ARB_MAX_LEGS = int(os.getenv('LATE_OBS_NO_ARB_MAX_LEGS', '6'))
+    LATE_OBS_NO_ARB_MAX_BASKET_USD = float(os.getenv('LATE_OBS_NO_ARB_MAX_BASKET_USD', '15.0'))
+
+    # ===================================================================
+    # RUN-ID / RUNTIME-ID MASTER SYSTEM (data/run_manager.py)
+    # Random collision-checked run id minted each boot, stamped into logs, paper
+    # trades, offload file names and the session manifest. Recover-update reuses
+    # the id to continue the SAME timeline/VPS data.
+    # ===================================================================
+    RUN_ID_ENABLED = os.getenv('RUN_ID_ENABLED', '1') == '1'
+
+    # ===================================================================
+    # VPS SERVICE CONTROL (overlay/vps_service.py) - master + per-document.
+    # VPS_SERVICES_ENABLED OFF => NO VPS service of any kind, including routing
+    # the weather fetch through the VPS proxy (falls back to direct Open-Meteo).
+    # Per-document target: 'vps' (offload + delete on Railway) or 'railway'
+    # (keep in the bot's own memory). Analysis pulls from the VPS when offload
+    # is on. All toggles are live-editable from Telegram /settings.
+    # ===================================================================
+    VPS_SERVICES_ENABLED = os.getenv('VPS_SERVICES_ENABLED', '1') == '1'   # MASTER switch
+    VPS_WEATHER_PROXY_ENABLED = os.getenv('VPS_WEATHER_PROXY_ENABLED', '1') == '1'
+    VPS_PULL_ON_ANALYSIS = os.getenv('VPS_PULL_ON_ANALYSIS', '1') == '1'
+    VPS_DOC_DEFAULT = os.getenv('VPS_DOC_DEFAULT', 'vps')                  # 'vps' | 'railway'
+    VPS_DOC_PAPER_TRADES = os.getenv('VPS_DOC_PAPER_TRADES', VPS_DOC_DEFAULT)
+    VPS_DOC_MAE = os.getenv('VPS_DOC_MAE', VPS_DOC_DEFAULT)
+    VPS_DOC_TIMESERIES = os.getenv('VPS_DOC_TIMESERIES', VPS_DOC_DEFAULT)
+    VPS_DOC_WEATHER_TRACE = os.getenv('VPS_DOC_WEATHER_TRACE', VPS_DOC_DEFAULT)
+    VPS_DOC_BOOK_TRACE = os.getenv('VPS_DOC_BOOK_TRACE', VPS_DOC_DEFAULT)
+    VPS_DOC_MANIFEST = os.getenv('VPS_DOC_MANIFEST', VPS_DOC_DEFAULT)
+
+    # ===================================================================
+    # WEATHER FETCH MODE (data/weather_fetcher.py) - 'normal' or 'limit10k'.
+    # normal   = fixed WEATHER_FORECAST_CACHE_SECONDS (works as before).
+    # limit10k = adaptive: the fetcher auto-sizes the cache TTL / poll interval
+    # from a daily request BUDGET so it stays under the Open-Meteo free tier
+    # (~10k/day) while planning around WEATHER_DAILY_BUDGET (default 13000).
+    # ===================================================================
+    WEATHER_FETCH_MODE = os.getenv('WEATHER_FETCH_MODE', 'normal').strip().lower()
+    WEATHER_DAILY_BUDGET = int(os.getenv('WEATHER_DAILY_BUDGET', '13000'))
+    WEATHER_LIMIT_SAFETY_PCT = float(os.getenv('WEATHER_LIMIT_SAFETY_PCT', '0.80'))  # target this fraction of budget
+    WEATHER_MIN_CACHE_SECONDS = int(os.getenv('WEATHER_MIN_CACHE_SECONDS', '120'))
+    WEATHER_MAX_CACHE_SECONDS = int(os.getenv('WEATHER_MAX_CACHE_SECONDS', '1800'))
+    # PHANTOM GUARD: refuse legacy CLOB $1/$0 win-snaps as settlements for ALL
+    # strategies (not just golden_no) so a modeled 'clob' mark never books a
+    # phantom win/loss - wait for the real resolver. Market EXITS still use the
+    # liquidity-aware simulated fill (real bid), never a phantom mark.
+    PHANTOM_GUARD_ALL_STRATEGIES = os.getenv('PHANTOM_GUARD_ALL_STRATEGIES', '1') == '1'
+    PAPER_EXIT_SLIPPAGE_PCT = float(os.getenv('PAPER_EXIT_SLIPPAGE_PCT', '1.5'))
 
     # ===================================================================
     # LATE OBSERVED-TEMPERATURE STRATEGY (PRIMARY) - trade the locked extreme
