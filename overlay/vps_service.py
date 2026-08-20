@@ -234,4 +234,25 @@ def edge_metrics(timeout: float = 4.0) -> Dict[str, object]:
     return {}
 
 
+def edge_models(timeout: float = 4.0) -> Dict[str, object]:
+    """Fetch the VPS edge node's /models model-log JSON (edge-1.3.0+): which
+    Open-Meteo models are fresh vs silent right now. Returns {} on any failure
+    (older edge node, VPS off/unreachable) so callers render gracefully."""
+    if not (configured() and services_enabled()):
+        return {}
+    base = str(_cfg("VPS_BASE_URL", "") or "").rstrip("/")
+    if not base:
+        return {}
+    try:
+        import requests  # type: ignore
+        r = requests.get(base + "/models", timeout=timeout)
+        if r.status_code == 200:
+            d = r.json()
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
 ensure_defaults()

@@ -161,6 +161,13 @@ class PeakerStrategy:
         self.warm_size_mult = float(g('PEAKER_WARM_SIZE_MULT', 0.80))
         self.min_entry = float(g('MIN_ENTRY_PRICE', 0.02))
         self.min_order = float(g('MIN_ORDER_SIZE', 1.0))
+        # -- time-based peak entry/exit (buy 2-3 days OR ~2h before the peak,
+        #    then hold or take profit based on the time data) --
+        self.lead_multiday_min_h = float(g('PEAKER_LEAD_MULTIDAY_MIN_H', 24.0))
+        self.lead_multiday_max_h = float(g('PEAKER_LEAD_MULTIDAY_MAX_H', 72.0))
+        self.lead_intraday_h = float(g('PEAKER_LEAD_INTRADAY_H', 2.0))
+        self.lead_cheap_price = float(g('PEAKER_LEAD_CHEAP_PRICE', 0.45))
+        self.lead_take_profit = float(g('PEAKER_LEAD_TAKE_PROFIT', 0.20))
 
     def evaluate(
         self,
@@ -172,6 +179,8 @@ class PeakerStrategy:
         city: str,
         stability: Optional[StabilityReport] = None,
         grade: float = 0.60,
+        forecast_series: Optional[List[Tuple]] = None,
+        now: Optional[object] = None,
     ) -> List[PeakerSignal]:
         self._load_cfg()  # pick up live /settings overrides
         if not self.enabled or not bucket_probs or balance <= 0:
@@ -372,6 +381,37 @@ class PeakerStrategy:
             shape = f'peaker WARM basket (peak {peak_label} + warmer {nb_legs[0].bucket_label})'
 
         exit_hint = "HOLD -- market-confirmed peaker, let it resolve"
+        hold_hint = True
+        # -- TIME-BASED PEAK PLAN: if a temperature time-series is available,
+        #    decide whether NOW is a buy-low window (peak 2-3 days OR ~2h out)
+        #    and set hold/sell timing hints from the peak's position in time. --
+        timing = None
+        if forecast_series:
+            try:
+                from datetime import datetime as _dt, timezone as _tz
+                from strategies.peak_timing import plan_peak
+                _now = now or _dt.now(_tz.utc)
+                timing = plan_peak(
+                    forecast_series, _now, market_price=market_price,
+                    intraday_entry_hours=self.lead_intraday_h,
+                    multiday_min_hours=self.lead_multiday_min_h,
+                    multiday_max_hours=self.lead_multiday_max_h,
+                    cheap_price=self.lead_cheap_price,
+                    take_profit=self.lead_take_profit)
+            except Exception as _e:
+                log.debug(f"Peaker {city}: peak-timing unavailable: {_e}")
+                timing = None
+        if timing is not None and timing.found:
+            htp = timing.hours_to_peak
+            when = (f"{htp/24.0:.1f}d" if (htp or 0) >= 24 else f"{htp:.1f}h") if htp is not None else "?"
+            # entry gate: only buy when the plan says we're in a cheap pre-peak
+            # window (buy at low), never chase a peak that already passed / rich.
+            if timing.action not in ("buy",):
+                log.info(f"Peaker {city}: peak {when} out, plan={timing.action}/{timing.horizon} "
+                         f"-- not a buy-low window, patient skip. {timing.reason}")
+                return []
+            exit_hint = (f"BUY-LOW {timing.horizon} peak in ~{when}; then HOLD and take "
+                         f"profit >= +{self.lead_take_profit:.0%} once past peak, else ride to resolve")
         reason = (
             f"PEAKER {city} [{sub}] trend={trend} grade={eff_grade:.2f} conf={peak_conf:.0%} "
             f"mkt_peak@{market_price:.2f} our_p={peak_our_prob:.0%} | {shape} | "
@@ -397,7 +437,7 @@ class PeakerStrategy:
             display_label=display,
             is_basket=is_basket,
             direction=('warming' if chosen_dir > 0 else 'cooling' if chosen_dir < 0 else 'stable'),
-            hold_hint=True,
+            hold_hint=hold_hint,
             exit_hint=exit_hint,
             reason=reason,
         )]

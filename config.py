@@ -467,7 +467,33 @@ class Config:
     WEATHER_SRC_WEATHERAPI_ENABLED = os.getenv('WEATHER_SRC_WEATHERAPI_ENABLED', '1') == '1'
     WEATHER_SRC_VISUALCROSSING_ENABLED = os.getenv('WEATHER_SRC_VISUALCROSSING_ENABLED', '1') == '1'
     WEATHER_SRC_NWS_ENABLED = os.getenv('WEATHER_SRC_NWS_ENABLED', '1') == '1'
+    # Direct ECMWF (ecds.ecmwf.int) served normalized by the VPS ingestor.
+    # OFF by default: GRIB decode needs the VPS-side job; on the bot it routes
+    # to VPS/OFF and never makes an unoptimal direct call.
+    WEATHER_SRC_ECMWF_DIRECT_ENABLED = os.getenv('WEATHER_SRC_ECMWF_DIRECT_ENABLED', '0') == '1'
+    WEATHER_SRC_ECMWF_AIFS_ENABLED = os.getenv('WEATHER_SRC_ECMWF_AIFS_ENABLED', '0') == '1'
+    ECMWF_API_URL = os.getenv('ECMWF_API_URL', 'https://ecds.ecmwf.int/api').strip()
     WEATHER_PIPELINE_FORECAST_DAYS = int(os.getenv('WEATHER_PIPELINE_FORECAST_DAYS', '3'))
+    # ---- MASTER weather intelligence brain (skill/learning/calibration/
+    # selection/optimizer). Separate settings so each pipeline is customizable.
+    WEATHER_MASTER_ENABLED = os.getenv('WEATHER_MASTER_ENABLED', '1') == '1'
+    WEATHER_MASTER_STATE_DIR = os.getenv('WEATHER_MASTER_STATE_DIR', 'data/weather_state').strip()
+    # smart source selection: re-audit suppressed sources every N days
+    WEATHER_SELECT_REEVAL_DAYS = float(os.getenv('WEATHER_SELECT_REEVAL_DAYS', '3'))
+    # always keep at least this many independent model families live
+    WEATHER_SELECT_MIN_INDEPENDENT = int(os.getenv('WEATHER_SELECT_MIN_INDEPENDENT', '3'))
+    # request-saving: suppress non-elected sources once a champion is proven
+    WEATHER_SELECT_SUPPRESS_ENABLED = os.getenv('WEATHER_SELECT_SUPPRESS_ENABLED', '1') == '1'
+    # RL-lite exploration floor for under-sampled model families (0..1)
+    WEATHER_OPTIMIZER_EPSILON = float(os.getenv('WEATHER_OPTIMIZER_EPSILON', '0.10'))
+    # grade/edge weight given to the master weather pipeline vote
+    GRADE_EDGE_WEATHER_W = float(os.getenv('GRADE_EDGE_WEATHER_W', '0.9'))
+    # peaker lead-time entry windows (buy low before the peak)
+    PEAKER_LEAD_MULTIDAY_MIN_H = float(os.getenv('PEAKER_LEAD_MULTIDAY_MIN_H', '24'))
+    PEAKER_LEAD_MULTIDAY_MAX_H = float(os.getenv('PEAKER_LEAD_MULTIDAY_MAX_H', '72'))
+    PEAKER_LEAD_INTRADAY_H = float(os.getenv('PEAKER_LEAD_INTRADAY_H', '2'))
+    PEAKER_LEAD_CHEAP_PRICE = float(os.getenv('PEAKER_LEAD_CHEAP_PRICE', '0.45'))
+    PEAKER_LEAD_TAKE_PROFIT = float(os.getenv('PEAKER_LEAD_TAKE_PROFIT', '0.20'))
     # PHANTOM GUARD: refuse legacy CLOB $1/$0 win-snaps as settlements for ALL
     # strategies (not just golden_no) so a modeled 'clob' mark never books a
     # phantom win/loss - wait for the real resolver. Market EXITS still use the

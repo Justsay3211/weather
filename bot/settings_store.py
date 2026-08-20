@@ -111,6 +111,9 @@ BOOL_KEYS = [
     'PEAKER_PREFER_COOL', 'PEAKER_TRADE_DECIDED', 'PEAK_CLUSTER_TRADE_DECIDED',
     'PEAK_CLUSTER_CONTIGUOUS_ENABLED', 'PEAK_CLUSTER_PROB_BASED_ENABLED',
     'PEAK_CLUSTER_OUTER_TP_ENABLED',
+    # advanced weather pipeline / master brain
+    'WEATHER_SRC_ECMWF_DIRECT_ENABLED', 'WEATHER_SRC_ECMWF_AIFS_ENABLED',
+    'WEATHER_MASTER_ENABLED', 'WEATHER_SELECT_SUPPRESS_ENABLED',
     # exits / liquidity / gating
     'THESIS_EXIT_ENABLED', 'LIQUIDITY_GUARD_ENABLED', 'LIQUIDITY_STRICT_BLOCK',
     'GRADE_SIZING_ENABLED', 'SKIP_DECIDED_MARKETS',
@@ -163,6 +166,16 @@ NUM_KEYS: Dict[str, tuple] = {
     # ops
     'SUMMARY_INTERVAL_MIN':        (0, 240, 15, True),
     'WEATHER_PIPELINE_FORECAST_DAYS': (1, 7, 1, True),
+    # master weather brain knobs
+    'WEATHER_SELECT_REEVAL_DAYS':   (0.5, 30, 0.5, False),
+    'WEATHER_SELECT_MIN_INDEPENDENT': (1, 8, 1, True),
+    'WEATHER_OPTIMIZER_EPSILON':    (0.0, 1.0, 0.05, False),
+    'GRADE_EDGE_WEATHER_W':         (0.0, 3.0, 0.1, False),
+    'PEAKER_LEAD_MULTIDAY_MIN_H':   (0, 120, 6, False),
+    'PEAKER_LEAD_MULTIDAY_MAX_H':   (0, 168, 6, False),
+    'PEAKER_LEAD_INTRADAY_H':       (0, 12, 0.5, False),
+    'PEAKER_LEAD_CHEAP_PRICE':      (0.0, 1.0, 0.05, False),
+    'PEAKER_LEAD_TAKE_PROFIT':      (0.0, 1.0, 0.05, False),
     # risk & sizing
     'MAX_BET_PCT':                 (0.05, 1.00, 0.05, False),
     'MAX_POSITIONS':               (1, 50, 1, True),
@@ -363,6 +376,9 @@ STR_KEYS: Dict[str, List[str]] = {
     # 2026-08-20: per-source execution override string, e.g.
     # 'open_meteo:vps,openweather:bot,weatherapi:off'. Free text (see below).
     'WEATHER_SOURCE_LOCATION': [''],
+    # 2026-08-20: master brain state dir + direct ECMWF endpoint (free text).
+    'WEATHER_MASTER_STATE_DIR': ['data/weather_state'],
+    'ECMWF_API_URL': ['https://ecds.ecmwf.int/api'],
 }
 
 # STR keys that accept FREE TEXT (not a fixed choice list) — e.g. the overlay
@@ -370,7 +386,7 @@ STR_KEYS: Dict[str, List[str]] = {
 # overlay registers such keys here and gives them a 1-item choices list so the
 # v[0] default fallback in str_snapshot()/_persist() stays safe.
 FREE_TEXT_STR_KEYS = {'ML_LOCKED_PROFILE', 'ML_API_URL', 'ML_MODEL', 'ML_ANALYSIS_MODEL',
-                      'WEATHER_SOURCE_LOCATION'}
+                      'WEATHER_SOURCE_LOCATION', 'WEATHER_MASTER_STATE_DIR', 'ECMWF_API_URL'}
 
 # -- Tabs for the Telegram /settings panel. Each group lists the keys (toggles
 # and/or gates) shown when that tab is active, in display order. ------------
@@ -463,6 +479,19 @@ GROUPS: List[dict] = [
         'WEATHER_SRC_OPEN_METEO_ENABLED', 'WEATHER_SRC_OPENWEATHER_ENABLED',
         'WEATHER_SRC_WEATHERAPI_ENABLED', 'WEATHER_SRC_VISUALCROSSING_ENABLED',
         'WEATHER_SRC_NWS_ENABLED',
+        'WEATHER_SRC_ECMWF_DIRECT_ENABLED', 'WEATHER_SRC_ECMWF_AIFS_ENABLED',
+        'ECMWF_API_URL',
+    ]},
+    # 2026-08-20: the MASTER weather intelligence brain (skill/learning/
+    # calibration/selection/optimizer). Separate settings so every part of the
+    # data pipeline is independently customisable, per the master prompt.
+    {'id': 'wxmaster', 'tab': 'WX Master', 'title': 'Master Weather Brain (skill, learning, calibration, smart source selection, optimizer)', 'keys': [
+        'WEATHER_MASTER_ENABLED', 'WEATHER_MASTER_STATE_DIR',
+        'WEATHER_SELECT_SUPPRESS_ENABLED', 'WEATHER_SELECT_REEVAL_DAYS',
+        'WEATHER_SELECT_MIN_INDEPENDENT', 'WEATHER_OPTIMIZER_EPSILON',
+        'GRADE_EDGE_WEATHER_W',
+        'PEAKER_LEAD_MULTIDAY_MIN_H', 'PEAKER_LEAD_MULTIDAY_MAX_H',
+        'PEAKER_LEAD_INTRADAY_H', 'PEAKER_LEAD_CHEAP_PRICE', 'PEAKER_LEAD_TAKE_PROFIT',
     ]},
     {'id': 'quickflip', 'tab': 'Flip', 'title': 'Quick-Flip', 'keys': [
         'QUICK_FLIP_PROFIT_ONLY_EXIT', 'QUICK_FLIP_USE_ML_EXIT',

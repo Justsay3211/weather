@@ -328,6 +328,81 @@ class NwsAdapter(BaseAdapter):
         return [ForecastSeries(identity=idn, points=pts, location=city or ("%s,%s" % (lat, lon)))]
 
 
+class EcmwfDirectAdapter(BaseAdapter):
+    """Direct ECMWF access via the ECMWF Data Stores API (ecds.ecmwf.int/api).
+
+    ECMWF open/licensed data ships as GRIB2, which needs eccodes/cfgrib to
+    decode — a job for the VPS ingestor, NOT the Railway bot. So this adapter is
+    designed to run on the VPS (execution=vps) where an ECMWF ingestor decodes
+    GRIB and re-serves it as NORMALIZED hourly JSON with the same shape the rest
+    of the pipeline consumes. On the bot (no eccodes) it is routed to VPS/OFF by
+    the ExecutionRouter and never makes an unoptimal direct call.
+
+    model_family='ECMWF_IFS' is DELIBERATELY identical to Open-Meteo's ECMWF so
+    the dependency graph de-duplicates them (prompt: never count Open-Meteo
+    ECMWF and direct ECMWF as two independent models).
+    """
+    provider = "ecmwf"
+    daily_budget = 200          # model runs 00/06/12/18z — few requests/day
+
+    def __init__(self, api_url: str = "https://ecds.ecmwf.int/api",
+                 api_key: str = "", product: str = "ifs", forecast_days: int = 5):
+        self.api_url = api_url
+        self.api_key = api_key or ""
+        self.product = product          # 'ifs' (physics) or 'aifs' (AI)
+        self.forecast_days = forecast_days
+
+    def _family(self):
+        return "ECMWF_AIFS" if self.product == "aifs" else "ECMWF_IFS"
+
+    def identities(self):
+        is_ai = self.product == "aifs"
+        return [SourceIdentity(
+            source="ecmwf:" + self.product, provider=self.provider,
+            model_family=self._family(),
+            category=(Category.RAW_MODEL if not is_ai else Category.RAW_MODEL),
+            product=("aifs_single" if is_ai else "open_data"),
+            model_version=("AIFS" if is_ai else "IFS"), resolution="0.25deg",
+            prior_weight=(0.78 if is_ai else 0.82),
+            license="ECMWF-open-data (CC-BY-4.0, attribution required)",
+            attribution="ECMWF", commercial_ok=True)]
+
+    def build_requests(self, lat, lon, city):
+        # The VPS ingestor exposes a normalized endpoint keyed by product; the
+        # bearer key authenticates to the ECMWF Data Stores behind it.
+        url = self.api_url.rstrip("/") + "/v1/normalized/" + self.product
+        params = {"lat": lat, "lon": lon, "days": self.forecast_days,
+                  "key": self.api_key}
+        return [(url, params)]
+
+    def parse(self, payload, lat, lon, city):
+        idn = self.identities()[0]
+        hourly = (payload or {}).get("hourly") or {}
+        times = hourly.get("time") or []
+        temp = hourly.get("temperature_2m") or []
+        precip = hourly.get("precipitation") or []
+        hum = hourly.get("relative_humidity_2m") or []
+        cloud = hourly.get("cloud_cover") or []
+        wind = hourly.get("wind_speed_10m") or []
+        wdir = hourly.get("wind_direction_10m") or []
+        pprob = hourly.get("precipitation_probability") or []
+        run_time = _parse_iso((payload or {}).get("run_time") or "")
+        pts: List[ForecastPoint] = []
+        for i, t in enumerate(times):
+            vt = _parse_iso(t)
+            if vt is None:
+                continue
+            pts.append(ForecastPoint(
+                valid_time=vt, temp_c=_at(temp, i), precip_mm=_at(precip, i),
+                humidity_pct=_at(hum, i), cloud_cover_pct=_at(cloud, i),
+                wind_speed_kmh=_at(wind, i), wind_dir_deg=_at(wdir, i),
+                precip_prob_pct=_at(pprob, i)))
+        if not pts:
+            return []
+        return [ForecastSeries(identity=idn, points=pts, run_time=run_time,
+                               location=city or ("%s,%s" % (lat, lon)))]
+
+
 def _at(arr, i):
     if arr is None or i >= len(arr):
         return None

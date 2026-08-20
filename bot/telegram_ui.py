@@ -1198,6 +1198,81 @@ class TelegramBot:
             log.debug(f"weatherquota pipeline describe failed: {e}")
         self.send(text)
 
+    def send_weather_models(self):
+        """/weathermodels -- the model log: what's working, which model families
+        are elected/challenger/suppressed by the smart source selector, per-model
+        historical skill, calibration status, and the live edge-node model feed.
+        This makes the master brain's 1000s-of-calculations decision observable."""
+        L = '-' * 28
+        text = "\U0001F9E0 <b>Weather model log</b>\n" + L + "\n"
+
+        # --- master brain: skill ranking + source election + calibration -----
+        brain_shown = False
+        try:
+            if bool(getattr(Config, 'WEATHER_MASTER_ENABLED', False)):
+                from data.weather import factory as _wf
+                master = _wf.build_master(Config)
+                if master is not None:
+                    brain_shown = True
+                    # per-model historical skill snapshot (aggregated learning
+                    # state: sample count, RMSE, bias -- lower RMSE = better).
+                    try:
+                        snap = master.skill.snapshot() if hasattr(master, 'skill') else {}
+                    except Exception:
+                        snap = {}
+                    if snap:
+                        rows = []
+                        for key, st in snap.items():
+                            if not isinstance(st, dict):
+                                continue
+                            rows.append((key, int(st.get('n') or 0),
+                                         st.get('rmse'), st.get('bias')))
+                        rows.sort(key=lambda r: -r[1])
+                        text += "<b>Historical skill</b> (learned per model/lead):\n"
+                        for key, n, rmse, bias in rows[:10]:
+                            line = f"  \u2022 {self._esc(str(key))}: n={n}"
+                            if rmse is not None:
+                                line += f" \u00B7 RMSE <b>{float(rmse):.2f}</b>"
+                            if bias is not None:
+                                line += f" \u00B7 bias {float(bias):+.2f}"
+                            text += line + "\n"
+                    else:
+                        text += ("<b>Historical skill</b>: warming up "
+                                 "(no verified observations recorded yet).\n")
+                    # optimizer / config summary so the operator sees the knobs
+                    text += (L + "\n<b>Engine</b>: reeval every "
+                             f"{float(getattr(Config,'WEATHER_SELECT_REEVAL_DAYS',3)):g}d \u00B7 "
+                             f"min-independent {int(getattr(Config,'WEATHER_SELECT_MIN_INDEPENDENT',3))} \u00B7 "
+                             f"RL \u03B5={float(getattr(Config,'WEATHER_OPTIMIZER_EPSILON',0.10)):.2f} \u00B7 "
+                             f"suppress {'ON' if getattr(Config,'WEATHER_SELECT_SUPPRESS_ENABLED',True) else 'OFF'}\n")
+        except Exception as e:
+            log.debug(f"weathermodels brain failed: {e}")
+        if not brain_shown:
+            text += ("Master brain: <b>OFF</b> or warming up "
+                     "(enable in /settings \u2192 WX Master).\n")
+
+        # --- live edge-node per-model feed (edge-1.3.0 /models) ---------------
+        try:
+            from overlay import vps_service as _vps
+            md = _vps.edge_models()
+            if md and md.get('models') is not None:
+                fresh = int(md.get('fresh_count') or 0)
+                silent = int(md.get('silent_count') or 0)
+                ver = str(md.get('version') or '')
+                text += (L + f"\n\U0001F4E1 <b>Edge node feed</b> {self._esc(ver)} "
+                         f"\u00B7 {fresh} fresh / {silent} silent\n")
+                for m in (md.get('models') or [])[:12]:
+                    st = str(m.get('status'))
+                    tick = '\u2705' if st == 'fresh' else '\u274C'
+                    text += (f"  {tick} {self._esc(str(m.get('key')))} "
+                             f"({int(m.get('points') or 0)} pts)\n")
+            else:
+                text += (L + "\n\U0001F4E1 Edge node model feed: <i>n/a</i> "
+                         "(VPS off/unreachable or edge < 1.3.0).\n")
+        except Exception as e:
+            log.debug(f"weathermodels edge feed failed: {e}")
+        self.send(text)
+
     def send_analysis(self):
         """/analysis -- clean strategy performance + HOW positions closed
         (counts, W/L, realized PnL per exit type) + downloadable CSVs.
@@ -2805,6 +2880,8 @@ class TelegramBot:
                 self.send(f"\u26A0\uFE0F weather health unavailable: {e}")
         elif cmd in ('/weatherquota', '/wxquota', '/quota'):
             self.send_weather_quota()
+        elif cmd in ('/weathermodels', '/wxmodels', '/models', '/modellog'):
+            self.send_weather_models()
         elif cmd in ('/close', '/sell'):
             self.send_close_menu()
         elif cmd in ('/done', '/history'):

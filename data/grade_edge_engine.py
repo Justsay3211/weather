@@ -144,6 +144,15 @@ class Features:
     # ml pipeline
     ml_prob: Optional[float] = None    # live ML P(win) if available
     ml_confidence: Optional[float] = None
+    # weather-master pipeline (the 1000s-of-calculations confidence engine).
+    # These come straight from data/weather/master.MasterForecastResult so the
+    # edge + grade are ADJUSTED by the master forecast quality.
+    wx_confidence: Optional[float] = None   # 0..100 master confidence for the driving variable
+    wx_support: Optional[float] = None       # 0..1 supporting-factor score (skill+agreement+calibration)
+    wx_calibrated_prob: Optional[float] = None  # 0..1 calibrated probability of the outcome
+    wx_n_independent: int = 0                # effective independent model families
+    wx_warnings: int = 0                     # count of master warnings (stale/lowN/extended)
+    wx_correction: Optional[str] = None      # 'gbm' | 'bias' | 'raw'
 
 
 @dataclass
@@ -293,6 +302,33 @@ def _ml_votes(fx: Features):
     return votes
 
 
+def _weather_votes(fx: Features):
+    """WEATHER-MASTER pipeline: fold the master forecast's confidence, support,
+    calibrated probability, model agreement and warnings into the score. This
+    is the 'high confidence created through 1000s of calculations must win'
+    lever the user asked for — but it is bounded so it can never reproduce the
+    old overconfidence."""
+    votes = []
+    if fx.wx_confidence is not None:
+        # centre on 60 (MEDIUM/HIGH boundary); strong master confidence pushes up
+        votes.append(("wx_conf", _clip((fx.wx_confidence - 60.0) / 25.0, -1.4, 1.8)))
+    if fx.wx_support is not None:
+        votes.append(("wx_support", _clip((fx.wx_support - 0.5) / 0.3, -1.2, 1.4)))
+    if fx.wx_calibrated_prob is not None:
+        # only a mild, saturating nudge — calibration already tamed it
+        votes.append(("wx_calib", _clip(_logit(fx.wx_calibrated_prob) * 0.3, -1.0, 1.0)))
+    if fx.wx_n_independent:
+        if fx.wx_n_independent >= 4:
+            votes.append(("wx_agreement", 0.5))
+        elif fx.wx_n_independent <= 1:
+            votes.append(("wx_agreement", -0.8))
+    if fx.wx_warnings:
+        votes.append(("wx_warnings", _clip(-0.4 * fx.wx_warnings, -1.2, 0.0)))
+    if fx.wx_correction == "gbm":
+        votes.append(("wx_biascorr", 0.25))   # learned bias-correction applied
+    return votes
+
+
 # --------------------------------------------------------------------------- #
 # Main scorer
 # --------------------------------------------------------------------------- #
@@ -302,6 +338,7 @@ _PIPELINE_WEIGHT = {
     "liquidity": 0.5,
     "history": 0.6,
     "ml": 0.7,
+    "weather": float(_f("GRADE_EDGE_WEATHER_W", 0.9)),
 }
 
 
@@ -325,6 +362,7 @@ def score(fx: Features) -> GradeEdgeResult:
             "liquidity": _liquidity_votes(fx),
             "history": _history_votes(fx),
             "ml": _ml_votes(fx),
+            "weather": _weather_votes(fx),
         }
         components: Dict[str, float] = {}
         # Anchor on the raw model logit, then add weighted pipeline votes. Each
@@ -363,11 +401,20 @@ def score(fx: Features) -> GradeEdgeResult:
         # agreement, and liquidity. Independent of raw edge magnitude.
         spread_term = 1.0 - _clip((fx.remaining_spread_c or 0.0) / 2.0, 0.0, 1.0)
         liq_term = 0.0 if fx.thin_book else 1.0
+        # weather-master quality term (support + confidence), neutral 0.5 when absent
+        if fx.wx_confidence is not None or fx.wx_support is not None:
+            wx_term = _clip(
+                0.6 * ((fx.wx_confidence or 50.0) / 100.0)
+                + 0.4 * (fx.wx_support if fx.wx_support is not None else 0.5),
+                0.0, 1.0)
+        else:
+            wx_term = 0.5
         grade = _clip(
-            0.35 * _clip(fx.lock_confidence, 0, 1)
-            + 0.25 * _clip((edge + 0.10) / 0.35, 0, 1)   # mild, saturates fast
-            + 0.20 * spread_term
-            + 0.20 * liq_term,
+            0.30 * _clip(fx.lock_confidence, 0, 1)
+            + 0.20 * _clip((edge + 0.10) / 0.35, 0, 1)   # mild, saturates fast
+            + 0.15 * spread_term
+            + 0.15 * liq_term
+            + 0.20 * wx_term,                            # master forecast quality
             0.0, 1.0,
         )
 
