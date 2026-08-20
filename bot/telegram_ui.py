@@ -1108,6 +1108,96 @@ class TelegramBot:
         except Exception as e:
             log.debug(f"book_trace export skipped: {e}")
 
+    def send_weather_quota(self):
+        """/weatherquota -- how many Open-Meteo requests we've used TODAY, split
+        VPS (edge node) vs bot (Railway direct), against the daily budget, plus
+        the current fetch mode, adaptive cache TTL, and the advanced-pipeline
+        execution routing (which source runs where). Fully defensive."""
+        budget = int(getattr(Config, 'WEATHER_DAILY_BUDGET', 13000))
+        safety = float(getattr(Config, 'WEATHER_LIMIT_SAFETY_PCT', 0.80))
+        mode = str(getattr(Config, 'WEATHER_FETCH_MODE', 'normal'))
+        target = int(budget * safety)
+
+        # --- VPS edge-node side (today counter added 2026-08-20) ----------
+        vps_today = None
+        vps_boot_total = None
+        node_ver = ''
+        try:
+            from overlay import vps_service as _vps
+            m = _vps.edge_metrics()
+            if m:
+                node_ver = str(m.get('version') or '')
+                if 'open_meteo_today' in m:
+                    vps_today = int(m.get('open_meteo_today') or 0)
+                wx = m.get('weather') or {}
+                vps_boot_total = int(wx.get('open_meteo_upstream_total')
+                                     or m.get('open_meteo_upstream_total') or 0)
+        except Exception as e:
+            log.debug(f"weatherquota edge metrics failed: {e}")
+
+        # --- bot (Railway) direct side ------------------------------------
+        bot_today = None
+        fetcher = (getattr(self, 'fetcher', None)
+                   or getattr(self.scanner, 'weather_fetcher', None)
+                   or getattr(self.scanner, 'fetcher', None)
+                   or getattr(self.pm, 'weather_fetcher', None))
+        if fetcher is not None:
+            try:
+                bot_today = int(getattr(fetcher, '_req_count', 0) or 0)
+            except Exception:
+                bot_today = None
+
+        known = (vps_today or 0) + (bot_today or 0)
+        pct = (100.0 * known / budget) if budget else 0.0
+
+        try:
+            from overlay import vps_service as _vps2
+            vps_on = bool(_vps2.services_enabled() and _vps2.weather_proxy_enabled())
+        except Exception:
+            vps_on = False
+
+        text = (
+            "\U0001F326\uFE0F <b>Weather request quota</b> (today, UTC)\n"
+            f"{'-'*28}\n"
+            f"Budget: <b>{budget:,}</b>/day \u00B7 safety target {target:,} ({safety*100:.0f}%)\n"
+            f"Fetch mode: <b>{self._esc(mode)}</b>\n"
+        )
+        if mode == 'limit10k':
+            text += (f"Adaptive cache TTL window: {int(getattr(Config,'WEATHER_MIN_CACHE_SECONDS',120))}"
+                     f"-{int(getattr(Config,'WEATHER_MAX_CACHE_SECONDS',1800))}s\n")
+        text += f"{'-'*28}\n"
+        text += ("VPS edge node: "
+                 + (f"<b>{vps_today:,}</b> today" if vps_today is not None else "<i>n/a</i>")
+                 + (f" \u00B7 {vps_boot_total:,} since boot" if vps_boot_total is not None else "")
+                 + (f" \u00B7 {self._esc(node_ver)}" if node_ver else "")
+                 + f" \u00B7 {'ON' if vps_on else 'OFF'}\n")
+        text += ("Bot (Railway direct): "
+                 + (f"<b>{bot_today:,}</b> today" if bot_today is not None else "<i>n/a</i>")
+                 + "\n")
+        text += (f"{'-'*28}\n"
+                 f"Known used today: <b>{known:,}</b> / {budget:,} "
+                 f"(<b>{pct:.1f}%</b>)\n")
+        if known >= target:
+            text += "\u26A0\uFE0F At/over safety target -- cache TTL will stretch to protect the budget.\n"
+
+        # --- advanced pipeline execution routing --------------------------
+        try:
+            if bool(getattr(Config, 'WEATHER_PIPELINE_ENABLED', False)):
+                from data.weather import factory as _wf
+                desc = _wf.describe(Config, vps_available=vps_on, vps_weather_enabled=vps_on)
+                provs = desc.get('providers') or {}
+                text += (f"{'-'*28}\n"
+                         f"\U0001F9E9 <b>Advanced pipeline</b>: ON \u00B7 mode "
+                         f"<b>{self._esc(str(desc.get('mode')))}</b>\n")
+                for prov, loc in provs.items():
+                    text += f"  \u2022 {self._esc(prov)} \u2192 <b>{self._esc(str(loc))}</b>\n"
+            else:
+                text += (f"{'-'*28}\n\U0001F9E9 Advanced pipeline: OFF "
+                         "(legacy fetcher active). Turn on in /settings \u2192 WX Pipeline.\n")
+        except Exception as e:
+            log.debug(f"weatherquota pipeline describe failed: {e}")
+        self.send(text)
+
     def send_analysis(self):
         """/analysis -- clean strategy performance + HOW positions closed
         (counts, W/L, realized PnL per exit type) + downloadable CSVs.
@@ -1204,22 +1294,34 @@ class TelegramBot:
             log.debug(f"all-time history section skipped: {e}")
 
         # Downloadables: (1) tidy trades CSV, (2) per-position MAE/MFE path CSV.
-        recs = self._read_trade_log()
+        # 2026-08-20 FIX: the live local log is TRUNCATED after a VPS offload, so
+        # reading only _read_trade_log() made /analysis claim "no trade log" even
+        # when a full history existed in the pulled-back VPS bundle. Build the
+        # CSV from the MERGED history (local tail + any pulled bundle) and only
+        # fall back to the live log when the merge is empty. This guarantees the
+        # trade log downloads whenever ANY record exists on disk.
+        recs = self._merged_history_records()
+        src_label = "all-time (local + VPS bundle)"
+        if not recs:
+            recs = self._read_trade_log()
+            src_label = "live log"
         if recs:
             csv_path = self._write_trades_csv(recs)
             if csv_path:
                 self._send_document(
                     csv_path,
-                    caption=(f"\U0001F4CE Trades CSV -- {len(recs)} rows "
+                    caption=(f"\U0001F4CE Trades CSV -- {len(recs)} rows \u00B7 {src_label} "
                              f"(buys / sells / exits / profits)"),
                 )
             else:
                 self._send_document(
                     self._trade_log_path(),
-                    caption=(f"\U0001F4CE Full trade log -- {len(recs)} records"),
+                    caption=(f"\U0001F4CE Full trade log -- {len(recs)} records \u00B7 {src_label}"),
                 )
         else:
-            self.send("\u2139\uFE0F No trade-log records yet -- the log is empty.")
+            self.send("\u2139\uFE0F No trade-log records yet -- no BUY/SELL/SETTLE "
+                      "rows on disk (local log or VPS bundle). Place a paper "
+                      "trade or run /exportdata, then retry /analysis.")
         mm_csv = self._jsonl_to_csv('data/positions_mae_mfe.jsonl')
         if mm_csv:
             self._send_document(
@@ -2701,6 +2803,8 @@ class TelegramBot:
                 self.send(_wt.summarize())
             except Exception as e:
                 self.send(f"\u26A0\uFE0F weather health unavailable: {e}")
+        elif cmd in ('/weatherquota', '/wxquota', '/quota'):
+            self.send_weather_quota()
         elif cmd in ('/close', '/sell'):
             self.send_close_menu()
         elif cmd in ('/done', '/history'):

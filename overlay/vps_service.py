@@ -213,4 +213,25 @@ def node_version(timeout: float = 4.0) -> str:
     return ""
 
 
+def edge_metrics(timeout: float = 4.0) -> Dict[str, object]:
+    """Fetch the VPS edge node's /metrics JSON (incl. the 2026-08-20
+    open_meteo_today daily counter). Returns {} on any failure so callers can
+    render gracefully. Respects the VPS master switch."""
+    if not (configured() and services_enabled()):
+        return {}
+    base = str(_cfg("VPS_BASE_URL", "") or "").rstrip("/")
+    if not base:
+        return {}
+    try:
+        import requests  # type: ignore
+        r = requests.get(base + "/metrics", timeout=timeout)
+        if r.status_code == 200:
+            d = r.json()
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
 ensure_defaults()

@@ -73,6 +73,16 @@ _NEW_DEFAULTS = {
     'VPS_HANDLING_WEATHER_TRACE': os.getenv('VPS_HANDLING_WEATHER_TRACE', 'full'),
     'VPS_PULL_ON_OFFLOAD': os.getenv('VPS_PULL_ON_OFFLOAD', '0') == '1',
     'VPS_ANALYSIS_MERGE_ENABLED': os.getenv('VPS_ANALYSIS_MERGE_ENABLED', '1') == '1',
+    # 2026-08-20: advanced weather pipeline (data/weather/) customisation.
+    'WEATHER_PIPELINE_ENABLED': os.getenv('WEATHER_PIPELINE_ENABLED', '0') == '1',
+    'WEATHER_EXECUTION_MODE': os.getenv('WEATHER_EXECUTION_MODE', 'auto'),
+    'WEATHER_SOURCE_LOCATION': os.getenv('WEATHER_SOURCE_LOCATION', ''),
+    'WEATHER_SRC_OPEN_METEO_ENABLED': os.getenv('WEATHER_SRC_OPEN_METEO_ENABLED', '1') == '1',
+    'WEATHER_SRC_OPENWEATHER_ENABLED': os.getenv('WEATHER_SRC_OPENWEATHER_ENABLED', '1') == '1',
+    'WEATHER_SRC_WEATHERAPI_ENABLED': os.getenv('WEATHER_SRC_WEATHERAPI_ENABLED', '1') == '1',
+    'WEATHER_SRC_VISUALCROSSING_ENABLED': os.getenv('WEATHER_SRC_VISUALCROSSING_ENABLED', '1') == '1',
+    'WEATHER_SRC_NWS_ENABLED': os.getenv('WEATHER_SRC_NWS_ENABLED', '1') == '1',
+    'WEATHER_PIPELINE_FORECAST_DAYS': int(os.getenv('WEATHER_PIPELINE_FORECAST_DAYS', '3')),
 }
 for _k, _v in _NEW_DEFAULTS.items():
     if not hasattr(Config, _k):
@@ -139,6 +149,11 @@ BOOL_KEYS = [
     # 2026-08-19: new grade+edge engine, run-id, phantom guard, new strategies
     'GRADE_EDGE_ENGINE_ENABLED', 'RUN_ID_ENABLED', 'PHANTOM_GUARD_ALL_STRATEGIES',
     'LATE_OBSERVED_REMASTER_ENABLED', 'LATE_OBS_NO_ARB_ENABLED',
+    # 2026-08-20: advanced weather pipeline enable + per-provider toggles
+    'WEATHER_PIPELINE_ENABLED',
+    'WEATHER_SRC_OPEN_METEO_ENABLED', 'WEATHER_SRC_OPENWEATHER_ENABLED',
+    'WEATHER_SRC_WEATHERAPI_ENABLED', 'WEATHER_SRC_VISUALCROSSING_ENABLED',
+    'WEATHER_SRC_NWS_ENABLED',
 ]
 
 # -- Numeric gates: key -> (min, max, step, is_int) ---------------------
@@ -147,6 +162,7 @@ NUM_KEYS: Dict[str, tuple] = {
     'STARTING_BALANCE':            (10, 1000000, 50, False),
     # ops
     'SUMMARY_INTERVAL_MIN':        (0, 240, 15, True),
+    'WEATHER_PIPELINE_FORECAST_DAYS': (1, 7, 1, True),
     # risk & sizing
     'MAX_BET_PCT':                 (0.05, 1.00, 0.05, False),
     'MAX_POSITIONS':               (1, 50, 1, True),
@@ -342,13 +358,19 @@ STR_KEYS: Dict[str, List[str]] = {
     'VPS_DOC_WEATHER_TRACE': ['vps', 'railway'],
     'VPS_DOC_BOOK_TRACE': ['vps', 'railway'],
     'VPS_DOC_MANIFEST': ['vps', 'railway'],
+    # 2026-08-20: where the whole weather pipeline runs by default.
+    'WEATHER_EXECUTION_MODE': ['auto', 'vps', 'bot', 'off'],
+    # 2026-08-20: per-source execution override string, e.g.
+    # 'open_meteo:vps,openweather:bot,weatherapi:off'. Free text (see below).
+    'WEATHER_SOURCE_LOCATION': [''],
 }
 
 # STR keys that accept FREE TEXT (not a fixed choice list) — e.g. the overlay
 # city lists. For these, /set stores the raw string. The advanced-settings
 # overlay registers such keys here and gives them a 1-item choices list so the
 # v[0] default fallback in str_snapshot()/_persist() stays safe.
-FREE_TEXT_STR_KEYS = {'ML_LOCKED_PROFILE', 'ML_API_URL', 'ML_MODEL', 'ML_ANALYSIS_MODEL'}
+FREE_TEXT_STR_KEYS = {'ML_LOCKED_PROFILE', 'ML_API_URL', 'ML_MODEL', 'ML_ANALYSIS_MODEL',
+                      'WEATHER_SOURCE_LOCATION'}
 
 # -- Tabs for the Telegram /settings panel. Each group lists the keys (toggles
 # and/or gates) shown when that tab is active, in display order. ------------
@@ -377,6 +399,38 @@ GROUPS: List[dict] = [
         'MAX_DAILY_DRAWDOWN_PCT', 'MAX_WEEKLY_DRAWDOWN_PCT', 'DRAWDOWN_COOLDOWN_MINUTES',
         'MIN_EDGE_TO_ENTER', 'GRADE_MIN_TO_TRADE', 'BALANCE_RESERVE_USD',
     ]},
+    # 2026-08-20: THE consolidated late-observed control tab. Previously the
+    # late-observed knobs were scattered across LateObs / Entry / Golden /
+    # Remaster / Observed-No-fix tabs. This single "main" tab gathers ALL of
+    # them, arranged: master toggles -> primary gates -> entry bands ->
+    # timing -> remaster -> no-arbitrage -> observed-no fill fix. The detailed
+    # per-area tabs are kept below for focused editing.
+    {'id': 'lateobsall', 'tab': 'Late-Obs \u2b50', 'title': 'Late-Observed \u2014 ALL settings (the main one)', 'keys': [
+        # master toggles
+        'LATE_OBSERVED_ENABLED', 'LATE_OBSERVED_NO_SIDE',
+        'LATE_OBSERVED_REMASTER_ENABLED', 'LATE_OBS_NO_ARB_ENABLED',
+        # primary gates / sizing
+        'LATE_OBSERVED_MIN_LOCK', 'LATE_OBSERVED_MIN_EDGE',
+        'LATE_OBSERVED_YES_MIN_LOCK', 'LATE_OBSERVED_YES_MIN_EDGE',
+        'LATE_OBSERVED_MAX_LEGS', 'LATE_OBSERVED_SIZE_FLOOR_USD',
+        'LATE_OBSERVED_SIZE_MAX_USD', 'LATE_OBSERVED_SIZE_MAX_PCT', 'LATE_OBSERVED_EDGE_FULL',
+        'LATE_OBSERVED_NO_MIN_PRICE', 'LATE_OBSERVED_NO_MAX_PRICE',
+        # entry bands
+        'LATE_OBS_YES_MIN_ENTRY', 'LATE_OBS_YES_MAX_ENTRY', 'LATE_OBS_YES_MIN_EDGE',
+        'LATE_OBS_NO_MIN_ENTRY', 'LATE_OBS_NO_MAX_ENTRY',
+        # timing windows
+        'LATE_OBS_TIMING_SAMEDAY_ENABLED', 'LATE_OBS_TIMING_1D_ENABLED',
+        'LATE_OBS_TIMING_2D_ENABLED', 'LATE_OBS_TIMING_3D_ENABLED',
+        'LATE_OBS_FETCH_AFTER_NEXT_DAY',
+        # remaster gates
+        'REMASTER_MIN_EDGE', 'REMASTER_MIN_GRADE', 'REMASTER_MIN_LOCK', 'REMASTER_SAMEDAY_MIN_LOCK',
+        # no-arbitrage basket gates
+        'LATE_OBS_NO_ARB_MIN_LOCK', 'LATE_OBS_NO_ARB_MIN_AVG_PROB', 'LATE_OBS_NO_ARB_MIN_GRADE',
+        'LATE_OBS_NO_ARB_MIN_PRICE', 'LATE_OBS_NO_ARB_MAX_PRICE',
+        'LATE_OBS_NO_ARB_MIN_LEGS', 'LATE_OBS_NO_ARB_MAX_LEGS', 'LATE_OBS_NO_ARB_MAX_BASKET_USD',
+        # observed-no fill fix
+        'P2B_ENTRY_CEILING', 'P2B_MIN_ROOM_USD', 'P2B_FORCE_EXIT_ENABLED',
+    ]},
     {'id': 'lateobs', 'tab': 'LateObs', 'title': 'Late-Observed (primary)', 'keys': [
         'LATE_OBSERVED_NO_SIDE',
         'LATE_OBSERVED_MIN_LOCK', 'LATE_OBSERVED_MIN_EDGE',
@@ -399,6 +453,16 @@ GROUPS: List[dict] = [
         'WX_MODEL_ECMWF_IFS04_ENABLED', 'WX_MODEL_GFS_SEAMLESS_ENABLED',
         'WX_MODEL_ICON_SEAMLESS_ENABLED', 'WX_MODEL_JMA_SEAMLESS_ENABLED',
         'WX_MODEL_GEM_SEAMLESS_ENABLED',
+    ]},
+    # 2026-08-20: advanced multi-layer weather PIPELINE (data/weather/). Fully
+    # customisable execution: run the whole thing on VPS, bot, or off, and pick
+    # per-source locations. Legacy fetcher stays available (old vs new).
+    {'id': 'wxpipeline', 'tab': 'WX Pipeline', 'title': 'Advanced Weather Pipeline (source identity, consensus, VPS/bot routing)', 'keys': [
+        'WEATHER_PIPELINE_ENABLED', 'WEATHER_EXECUTION_MODE', 'WEATHER_SOURCE_LOCATION',
+        'WEATHER_PIPELINE_FORECAST_DAYS',
+        'WEATHER_SRC_OPEN_METEO_ENABLED', 'WEATHER_SRC_OPENWEATHER_ENABLED',
+        'WEATHER_SRC_WEATHERAPI_ENABLED', 'WEATHER_SRC_VISUALCROSSING_ENABLED',
+        'WEATHER_SRC_NWS_ENABLED',
     ]},
     {'id': 'quickflip', 'tab': 'Flip', 'title': 'Quick-Flip', 'keys': [
         'QUICK_FLIP_PROFIT_ONLY_EXIT', 'QUICK_FLIP_USE_ML_EXIT',

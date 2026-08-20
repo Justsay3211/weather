@@ -63,6 +63,10 @@ class WeatherFetcher:
         self._om_idx = 0  # round-robin index across Open-Meteo endpoints
         # endpoint URL -> epoch time when it may be retried after a rate/IP limit
         self._om_cooldowns: Dict[str, float] = {}
+        # 2026-08-20: opt-in ADVANCED multi-layer pipeline (data/weather/*).
+        # Built lazily on first use; None until then. Legacy path stays default.
+        self._pipeline = None
+        self._pipeline_failed = False
 
     # ── API keys (Config attr first, then environment) ───────────────────
     @staticmethod
@@ -238,11 +242,130 @@ class WeatherFetcher:
 
         return None
 
+    # ── ADVANCED PIPELINE (opt-in) ───────────────────────────────────────
+    def _get_pipeline(self):
+        """Lazily build the advanced multi-layer weather pipeline
+        (data/weather/*) with the bot's HTTP session injected for BOT-routed
+        sources and the VPS edge node injected for VPS-routed Open-Meteo. Returns
+        None if the package is unavailable so callers fall back to legacy."""
+        if self._pipeline is not None or self._pipeline_failed:
+            return self._pipeline
+        try:
+            from data.weather import factory as _wf
+            from overlay import vps_service as _vps
+        except Exception as e:
+            log.warning(f"advanced weather pipeline unavailable, using legacy: {e}")
+            self._pipeline_failed = True
+            return None
+
+        base = str(getattr(Config, 'VPS_BASE_URL', '') or '').rstrip('/')
+        tok = str(getattr(Config, 'VPS_AUTH_TOKEN', '') or '')
+
+        def bot_http_get(url, params=None, headers=None):
+            r = self.session.get(url, params=params or {}, headers=headers or {}, timeout=12)
+            r.raise_for_status()
+            return r.json()
+
+        def edge_http_get(url, params=None, headers=None):
+            # Route Open-Meteo forecast calls through the VPS edge cache so the
+            # VPS 'takes care of it' — the bot makes ZERO direct Open-Meteo calls.
+            eurl = url
+            if base and 'open-meteo.com' in str(url) and '/v1/forecast' in str(url):
+                eurl = base + '/v1/forecast'
+            h = dict(headers or {})
+            if tok and eurl.startswith(base):
+                h['Authorization'] = 'Bearer ' + tok
+            r = self.session.get(eurl, params=params or {}, headers=h, timeout=12)
+            r.raise_for_status()
+            return r.json()
+
+        try:
+            vps_ok = bool(_vps.services_enabled() and _vps.weather_proxy_enabled() and base)
+        except Exception:
+            vps_ok = False
+
+        adapters = {a.provider: a for a in _wf.build_adapters(Config)}
+
+        def vps_fetch(provider, lat, lon, city):
+            # The edge node only proxies Open-Meteo today. Any other provider
+            # cannot be delegated -> return None so the router SKIPS it (never a
+            # unoptimal direct call from the bot).
+            if provider != 'open_meteo':
+                return None
+            ad = adapters.get('open_meteo')
+            if ad is None:
+                return None
+            return ad.fetch_and_parse(edge_http_get, lat, lon, city)
+
+        try:
+            self._pipeline = _wf.build_pipeline(
+                Config,
+                bot_http_get=bot_http_get,
+                vps_fetch=(vps_fetch if vps_ok else None),
+                vps_available=vps_ok,
+                vps_weather_enabled=vps_ok,
+                cache_ttl_s=self._effective_cache_ttl())
+        except Exception as e:
+            log.warning(f"advanced weather pipeline build failed, using legacy: {e}")
+            self._pipeline_failed = True
+            self._pipeline = None
+        return self._pipeline
+
+    @staticmethod
+    def _nearest_point(points, target_time):
+        if not points:
+            return None
+        if target_time is None:
+            return points[0]
+        tt = target_time
+        if tt.tzinfo is None:
+            tt = tt.replace(tzinfo=timezone.utc)
+        best, best_d = None, None
+        for p in points:
+            vt = getattr(p, 'valid_time', None)
+            if vt is None:
+                continue
+            if vt.tzinfo is None:
+                vt = vt.replace(tzinfo=timezone.utc)
+            d = abs((vt - tt).total_seconds())
+            if best_d is None or d < best_d:
+                best, best_d = p, d
+        return best or points[0]
+
+    def _pipeline_to_points(self, res, lat, lon, city, target_time):
+        """Convert an advanced PipelineResult into the legacy List[ForecastPoint]
+        contract so downstream consumers are unchanged."""
+        label = city or f"{lat:.2f},{lon:.2f}"
+        out: List[ForecastPoint] = []
+        for s in (getattr(res, 'series', None) or []):
+            p = self._nearest_point(getattr(s, 'points', None), target_time)
+            if p is None or getattr(p, 'temp_c', None) is None:
+                continue
+            ident = getattr(s, 'identity', None)
+            out.append(ForecastPoint(
+                source=getattr(ident, 'provider', '') or 'pipeline',
+                model=getattr(ident, 'model_family', '') or getattr(ident, 'source', ''),
+                location=label,
+                timestamp=getattr(p, 'valid_time', None) or datetime.now(timezone.utc),
+                temp_c=p.temp_c,
+                temp_min_c=getattr(p, 'temp_min_c', None),
+                temp_max_c=getattr(p, 'temp_max_c', None),
+                humidity_pct=getattr(p, 'humidity_pct', None),
+                wind_speed_kmh=getattr(p, 'wind_speed_kmh', None),
+                precip_mm=getattr(p, 'precip_mm', None),
+                cloud_cover_pct=getattr(p, 'cloud_cover_pct', None),
+            ))
+        return out
+
     def fetch_all(self, lat: float, lon: float, city: str = '',
                   target_time: datetime = None) -> List[ForecastPoint]:
         """
         Fetch forecasts from ALL available sources for a location.
         Returns list of ForecastPoint from different models/sources.
+
+        When WEATHER_PIPELINE_ENABLED is set, delegate to the advanced
+        multi-layer pipeline (customizable VPS/bot/off routing). Any failure
+        transparently falls back to the legacy multi-source path below.
         """
         cache_key = f"{lat:.2f},{lon:.2f},{target_time}"
         now = time.time()
@@ -250,6 +373,22 @@ class WeatherFetcher:
             cached_time, cached_data = self._cache[cache_key]
             if now - cached_time < self._effective_cache_ttl():
                 return cached_data
+
+        if bool(getattr(Config, 'WEATHER_PIPELINE_ENABLED', False)):
+            try:
+                pipe = self._get_pipeline()
+                if pipe is not None:
+                    res = pipe.run(lat, lon, city, when=target_time)
+                    pts = self._pipeline_to_points(res, lat, lon, city, target_time)
+                    if pts:
+                        self._cache[cache_key] = (now, pts)
+                        log.info(f"[pipeline] {len(pts)} points "
+                                 f"({res.n_independent} independent) for "
+                                 f"{city or f'{lat},{lon}'}")
+                        return pts
+                    log.warning("[pipeline] produced 0 points — falling back to legacy fetch")
+            except Exception as e:
+                log.warning(f"[pipeline] run failed ({e}); falling back to legacy fetch")
 
         results = []
 

@@ -87,6 +87,11 @@ class Config:
     # WEATHER API KEYS
     # ===================================================================
     OPENWEATHER_API_KEY = os.getenv('OPENWEATHER_API_KEY', '')
+    # 2026-08-20: additional providers for the advanced multi-layer pipeline
+    # (data/weather/). Empty string = provider disabled (skipped cleanly).
+    WEATHERAPI_API_KEY = os.getenv('WEATHERAPI_API_KEY', '')
+    VISUALCROSSING_API_KEY = os.getenv('VISUALCROSSING_API_KEY', '')
+    ECMWF_API_KEY = os.getenv('ECMWF_API_KEY', '')          # opendata/GRIB (deploy-verify)
     # Open-Meteo: no key needed (free, 10k calls/day)
     # weather.gov: no key needed (US gov free)
     # Open-Meteo endpoints to round-robin across. The free tier allows ~10k
@@ -436,6 +441,33 @@ class Config:
     WEATHER_LIMIT_SAFETY_PCT = float(os.getenv('WEATHER_LIMIT_SAFETY_PCT', '0.80'))  # target this fraction of budget
     WEATHER_MIN_CACHE_SECONDS = int(os.getenv('WEATHER_MIN_CACHE_SECONDS', '120'))
     WEATHER_MAX_CACHE_SECONDS = int(os.getenv('WEATHER_MAX_CACHE_SECONDS', '1800'))
+
+    # ===================================================================
+    # ADVANCED WEATHER PIPELINE (data/weather/) - 2026-08-20
+    # Opt-in multi-layer source pipeline: source identity + de-dup, cache-first,
+    # consensus, confidence, health/circuit-breakers, and fully CUSTOMIZABLE
+    # execution routing (VPS / bot / off) per source. Legacy weather_fetcher is
+    # preserved and used whenever WEATHER_PIPELINE_ENABLED is off (old vs new).
+    # ===================================================================
+    WEATHER_PIPELINE_ENABLED = os.getenv('WEATHER_PIPELINE_ENABLED', '0') == '1'
+    # WHERE the whole pipeline runs by default: 'auto' | 'vps' | 'bot' | 'off'.
+    #   auto = run on VPS when the master VPS weather proxy is on & reachable,
+    #          otherwise run on the bot (no unoptimal calls when VPS is off).
+    #   vps  = force VPS (if VPS off -> bot; if VPS on but unreachable -> skip,
+    #          NEVER make an unoptimal direct call - "just stop, vps take care").
+    #   bot  = always run directly on the bot/runtime.
+    #   off  = disable the pipeline entirely.
+    WEATHER_EXECUTION_MODE = os.getenv('WEATHER_EXECUTION_MODE', 'auto').strip().lower()
+    # Per-source execution override: 'source:location,source:location'
+    # e.g. 'open_meteo:vps,openweather:bot,weatherapi:off'. Blank = use default.
+    WEATHER_SOURCE_LOCATION = os.getenv('WEATHER_SOURCE_LOCATION', '').strip()
+    # Per-provider enable toggles (a disabled provider is never fetched anywhere)
+    WEATHER_SRC_OPEN_METEO_ENABLED = os.getenv('WEATHER_SRC_OPEN_METEO_ENABLED', '1') == '1'
+    WEATHER_SRC_OPENWEATHER_ENABLED = os.getenv('WEATHER_SRC_OPENWEATHER_ENABLED', '1') == '1'
+    WEATHER_SRC_WEATHERAPI_ENABLED = os.getenv('WEATHER_SRC_WEATHERAPI_ENABLED', '1') == '1'
+    WEATHER_SRC_VISUALCROSSING_ENABLED = os.getenv('WEATHER_SRC_VISUALCROSSING_ENABLED', '1') == '1'
+    WEATHER_SRC_NWS_ENABLED = os.getenv('WEATHER_SRC_NWS_ENABLED', '1') == '1'
+    WEATHER_PIPELINE_FORECAST_DAYS = int(os.getenv('WEATHER_PIPELINE_FORECAST_DAYS', '3'))
     # PHANTOM GUARD: refuse legacy CLOB $1/$0 win-snaps as settlements for ALL
     # strategies (not just golden_no) so a modeled 'clob' mark never books a
     # phantom win/loss - wait for the real resolver. Market EXITS still use the
