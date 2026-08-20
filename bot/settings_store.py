@@ -74,7 +74,7 @@ _NEW_DEFAULTS = {
     'VPS_PULL_ON_OFFLOAD': os.getenv('VPS_PULL_ON_OFFLOAD', '0') == '1',
     'VPS_ANALYSIS_MERGE_ENABLED': os.getenv('VPS_ANALYSIS_MERGE_ENABLED', '1') == '1',
     # 2026-08-20: advanced weather pipeline (data/weather/) customisation.
-    'WEATHER_PIPELINE_ENABLED': os.getenv('WEATHER_PIPELINE_ENABLED', '0') == '1',
+    'WEATHER_PIPELINE_ENABLED': os.getenv('WEATHER_PIPELINE_ENABLED', '1') == '1',
     'WEATHER_EXECUTION_MODE': os.getenv('WEATHER_EXECUTION_MODE', 'auto'),
     'WEATHER_SOURCE_LOCATION': os.getenv('WEATHER_SOURCE_LOCATION', ''),
     'WEATHER_SRC_OPEN_METEO_ENABLED': os.getenv('WEATHER_SRC_OPEN_METEO_ENABLED', '1') == '1',

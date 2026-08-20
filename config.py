@@ -449,7 +449,7 @@ class Config:
     # execution routing (VPS / bot / off) per source. Legacy weather_fetcher is
     # preserved and used whenever WEATHER_PIPELINE_ENABLED is off (old vs new).
     # ===================================================================
-    WEATHER_PIPELINE_ENABLED = os.getenv('WEATHER_PIPELINE_ENABLED', '0') == '1'
+    WEATHER_PIPELINE_ENABLED = os.getenv('WEATHER_PIPELINE_ENABLED', '1') == '1'
     # WHERE the whole pipeline runs by default: 'auto' | 'vps' | 'bot' | 'off'.
     #   auto = run on VPS when the master VPS weather proxy is on & reachable,
     #          otherwise run on the bot (no unoptimal calls when VPS is off).

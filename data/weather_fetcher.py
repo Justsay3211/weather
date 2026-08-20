@@ -67,6 +67,14 @@ class WeatherFetcher:
         # Built lazily on first use; None until then. Legacy path stays default.
         self._pipeline = None
         self._pipeline_failed = False
+        # 2026-08-20b: the MASTER weather brain (skill/learning/calibration/
+        # selection). Built lazily beside the pipeline. last_master_result holds
+        # the most recent calibrated MasterForecastResult so the grade/edge
+        # engine + buy-message layer can read confidence/support/warnings.
+        self._master = None
+        self._master_failed = False
+        self.last_master_result = None
+        self._master_saves = 0
 
     # ── API keys (Config attr first, then environment) ───────────────────
     @staticmethod
@@ -309,6 +317,16 @@ class WeatherFetcher:
             log.warning(f"advanced weather pipeline build failed, using legacy: {e}")
             self._pipeline_failed = True
             self._pipeline = None
+
+        # Build the master brain alongside the pipeline (opt-in via
+        # WEATHER_MASTER_ENABLED; build_master returns None when disabled).
+        if self._master is None and not self._master_failed:
+            try:
+                self._master = _wf.build_master(Config)
+            except Exception as e:
+                log.warning(f"master weather brain unavailable: {e}")
+                self._master = None
+                self._master_failed = True
         return self._pipeline
 
     @staticmethod
@@ -380,6 +398,22 @@ class WeatherFetcher:
                 if pipe is not None:
                     res = pipe.run(lat, lon, city, when=target_time)
                     pts = self._pipeline_to_points(res, lat, lon, city, target_time)
+                    # MASTER BRAIN: run skill-weighting, bias correction,
+                    # calibration, agreement + confidence on the consensus and
+                    # stash it for the decision layer. Fully additive — the
+                    # legacy List[ForecastPoint] contract below is unchanged.
+                    if self._master is not None:
+                        try:
+                            mf = self._master.analyze(res, lat, lon, when=target_time)
+                            self.last_master_result = mf
+                            self._master_saves += 1
+                            if self._master_saves % 10 == 0:
+                                self._master.save()
+                            log.info("[master] brain forecast ready "
+                                     f"(n_independent={getattr(mf, 'n_independent', 0)}, "
+                                     f"warnings={len(getattr(mf, 'warnings', []) or [])})")
+                        except Exception as _me:
+                            log.warning(f"[master] brain analyze skipped: {_me}")
                     if pts:
                         self._cache[cache_key] = (now, pts)
                         log.info(f"[pipeline] {len(pts)} points "
